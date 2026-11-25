@@ -96,8 +96,7 @@ final class MousePage: DevicePage {
         buttonRows.assigned = { [weak self] row, binding in self?.assign(row, binding) }
         bindingsBox = Ui.box("Buttons", buttonRows)
         bindingsBox.isHidden = true
-        let switchRow = NSStackView(views: [NSView(), viewPick])
-        view = Ui.page(header: header, body: [switchRow, settings, bindingsBox], status: status, buttons: [backups, revert, save])
+        view = Ui.page(header: header, body: [settings, bindingsBox], status: status, buttons: [backups, revert, save])
         header.show(device)
         // The mouse forgets inverted scrolling when it turns off, so it's checked every 5 s while kept on.
         watch = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.keepInverted() }
@@ -156,6 +155,9 @@ final class MousePage: DevicePage {
     }
 
     // ---- bindings ----
+
+    // At the right of the preset row, as on the keyboards.
+    override var headerAccessory: NSView? { viewPick }
 
     @objc private func viewPicked() { showView(buttons: viewPick.selectedSegment == 1) }
 

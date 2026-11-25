@@ -101,6 +101,7 @@ class DevicePage: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        addReportButton()
         guard presetText() != nil else { return }
         presets.target = self; presets.action = #selector(presetPicked)
         presets.widthAnchor.constraint(equalToConstant: 180).isActive = true
@@ -183,6 +184,51 @@ class DevicePage: NSViewController {
         if value == rememberedPreset { return }
         rememberedPreset = value
         if value.isEmpty { Settings.remove(presetKey) } else { Settings.set(presetKey, value) }
+    }
+
+    // ---- the device report (app/Pages.cs, Collect) ----
+
+    // The screen's name in the report's Screen row; the info page says the device isn't supported.
+    var reportScreen: String { String(describing: type(of: self)) }
+
+    private func addReportButton() {
+        guard !device.asleep, let content = header.superview else { return }
+        let button = NSButton(title: "Report", target: self, action: #selector(openReport))
+        button.bezelStyle = .recessed
+        button.setAccessibilityLabel("Report of this device")
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        header.titleRow.addArrangedSubview(spacer)
+        header.titleRow.addArrangedSubview(button)
+        header.titleRow.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
+    }
+
+    // For --snapshot.
+    func showReport() { openReport() }
+
+    @objc private func openReport() {
+        presentAsSheet(ReportView(noun: device.kind == "device" ? "device" : device.kind, title: ReportView.title(for: device)) { [weak self] done in
+            self?.collectReport(done)
+        })
+    }
+
+    // Read only (Report.Reader refuses anything else), on the device's queue; a screen without a connection of its own (the info page)
+    // opens one on the device's port.
+    private func collectReport(_ done: @escaping (String?, String?) -> Void) {
+        let device = self.device, screen = reportScreen
+        queue.async {
+            var text: String?, failure: String?
+            if device.plainHid { text = Report.plainHid(device, screen) } else {
+                do {
+                    let hidpp: Hidpp
+                    if let made = try? self.connection() { hidpp = made }
+                    else if let port = device.port { hidpp = try Hidpp(port: port, index: device.index) }
+                    else { throw GLiteError.io("The device is gone") }
+                    text = device.hidpp10 ? Report.registers(hidpp, device, screen) : Report.build(hidpp, device, screen)
+                } catch { failure = "\(error)" }
+            }
+            DispatchQueue.main.async { done(text, failure) }
+        }
     }
 
     // Back to –: the device shows something else now (another onboard profile).
@@ -465,6 +511,7 @@ enum Ui {
 
 final class PageHeader: NSStackView {
     private let title = NSTextField(labelWithString: ""), subtitle = NSTextField(labelWithString: "")
+    let titleRow = NSStackView()
 
     init(_ text: String = "") {
         super.init(frame: .zero)
@@ -474,7 +521,8 @@ final class PageHeader: NSStackView {
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         title.stringValue = text
         subtitle.textColor = .secondaryLabelColor
-        addArrangedSubview(title)
+        titleRow.addArrangedSubview(title)
+        addArrangedSubview(titleRow)
         addArrangedSubview(subtitle)
         subtitle.isHidden = true
     }
@@ -508,6 +556,7 @@ final class StatusLine: NSTextField {
 // For a device G-Lite for Mac can't change yet, or that is asleep (app/Pages.cs, InfoPage).
 final class InfoPage: DevicePage {
     private let rescan: () -> Void
+    override var reportScreen: String { "none, not supported yet" }
     private let state = Ui.secondary("")
     private let details = NSGridView()
 
@@ -560,8 +609,9 @@ final class EmptyPage: NSViewController {
 
     override func loadView() {
         let again = NSButton(title: "Scan for devices", target: self, action: #selector(scanAgain))
+        let report = NSButton(title: "Report your device", target: self, action: #selector(reportDevice))
         text.preferredMaxLayoutWidth = 520
-        view = Ui.page(header: PageHeader("No devices"), body: [text], status: nil, buttons: [NSView(), again])
+        view = Ui.page(header: PageHeader("No devices"), body: [text], status: nil, buttons: [NSView(), report, again])
         show(scanning: true)
     }
 
@@ -571,6 +621,8 @@ final class EmptyPage: NSViewController {
                 + "turn G-Lite on (if it's on already, remove it with − and open G-Lite again), then scan again."
             : "G-Lite didn't find a Logitech device. Turn it on or plug it in, then scan again."
     }
+
+    @objc private func reportDevice() { if let url = URL(string: ReportView.issues) { NSWorkspace.shared.open(url) } }
 
     @objc private func scanAgain() { rescan() }
 }

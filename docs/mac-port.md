@@ -24,7 +24,7 @@ mac/build.sh
   build until the app was signed with a real identity. If the permission still gets stuck: `tccutil reset ListenEvent org.g-lite.GLite`.
 - Permissions the app asks for: Input Monitoring (to open a receiver that is also a keyboard, and for Echo's key presses), Screen
   Recording (Screen and Audio effects), Microphone (the headset's Test sidetone only).
-- Command line: `GLite --demo` (fake devices, log in the temp folder), `--demo --snapshot <folder>` (each screen drawn into a PNG, light
+- Command line: `GLite --demo` (fake devices, log in the temp folder, settings in `GLite/Demo`; also Demo Mode in the menus), `--demo --snapshot <folder>` (each screen drawn into a PNG, light
   mode), `--scan` (what a scan finds, read only), `--screen` (what the Screen and Audio effects see for two seconds), `--selftest`,
   `--iconset`, `--tray` (start in the menu bar only, used by Run at login).
 
@@ -60,6 +60,9 @@ Windows had was ported one after the other.
     preview isn't saved.
 15. **Last pieces**: the Litra's live picture and Try effect, the headset's Test sidetone, the key picture's icons, the drag rectangle,
     the Game view's legends in the Mac's keyboard layout.
+16. **Report and demo**: the device report (Report at the right of each device screen's title: what G-Lite reads from the device,
+    read only, to copy or send in a GitHub issue when adding a device); the demo with every device Windows' demo lists (33, plus the
+    G213), reachable from the menus (Demo Mode), its settings kept apart from the real devices'.
 
 UI fixes along the way: title height, box margins and centring, sidebar icons of fixed width, every screen kept within Windows' window
 size (868 x 730).
@@ -81,13 +84,15 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 - **Writes to onboard memory** (G515, G915 family, mice, G9x pages, G300): the same bytes as Windows, compared in the self-test, but
   never sent to a real device from the Mac. A backup is always made first.
 - **Interactions only simulated or not clicked**: the drag rectangle (simulated with synthetic events), Try effect, Test sidetone,
-  the light bar's Per zone switch, the Game view's clicks.
+  the light bar's Per zone switch, the Game view's clicks, the Demo Mode menu item, the report's Copy and Open GitHub issue.
+- **The device report on a real device**: only on the fakes so far. Its first real use is the next step for adding devices.
 
 ## What's left
 
 ### To try on hardware, first
 
-1. A keyboard or mouse on a receiver, with `GLite --scan`: does the scan find it? This checks the one-device assumption above.
+1. A keyboard or mouse on a receiver, with `GLite --scan`: does the scan find it? This checks the one-device assumption above. Then
+   its Report, to compare with the Windows report of the same device.
 2. Then each screen with its device, starting with what's read only, then a live change, then a save.
 3. The ISO case of the Game view's legends (macOS swaps the key left of 1 and the one beside the left Shift on an ISO keyboard).
 

@@ -77,13 +77,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var screens: [(String, MainWindow.Row)] = devices.map { (String($0.key.dropFirst(5)), .device($0.key)) }
             + [("settings", .settings), ("logs", .logs)]
         // The mouse's Bindings view, the G915's G keys and the Game views too.
-        screens.append(("mouse-buttons", .device("demo|mouse")))
+        screens.append(("mouse-buttons", .device("demo|g502")))
         screens.append(("g915-keys", .device("demo|g915")))
         screens.append(("g515-game", .device("demo|g515")))
         screens.append(("g915-game", .device("demo|g915")))
+        screens.append(("g515-report", .device("demo|g515")))
         var next = 0
         Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [unowned self] timer in
-            guard let view = self.window.window?.contentView else { return }
+            // An open sheet (the device report) is drawn instead of the page under it.
+            guard let view = self.window.window?.attachedSheet?.contentView ?? self.window.window?.contentView else { return }
             // In light mode: a cached view draws without the window's background, which loses light text in dark mode.
             self.window.window?.appearance = NSAppearance(named: .aqua)
             if next > 0, let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
@@ -91,11 +93,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try? image.representation(using: .png, properties: [:])?
                     .write(to: URL(fileURLWithPath: folder).appendingPathComponent(screens[next - 1].0 + ".png"))
             }
+            if let sheet = self.window.window?.attachedSheet { self.window.window?.endSheet(sheet) }
             if next == screens.count { timer.invalidate(); NSApp.terminate(nil); return }
             self.window.select(screens[next].1)
-            if screens[next].0 == "mouse-buttons" { (self.window.page("demo|mouse") as? MousePage)?.showBindings() }
+            if screens[next].0 == "mouse-buttons" { (self.window.page("demo|g502") as? MousePage)?.showBindings() }
             if screens[next].0 == "g915-keys" { (self.window.page("demo|g915") as? LiveKeyboardPage)?.showKeys() }
             if screens[next].0 == "g515-game" { (self.window.page("demo|g515") as? KeyboardPage)?.showGame() }
+            if screens[next].0 == "g515-report" { (self.window.page("demo|g515") as? DevicePage)?.showReport() }
             if screens[next].0 == "g915-game" { (self.window.page("demo|g915") as? LiveKeyboardPage)?.showGame() }
             next += 1
         }
@@ -191,9 +195,20 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         if !demo { menu.addItem(NSMenuItem(title: scanning ? "Scanning…" : "Scan for devices", action: #selector(scan), keyEquivalent: "")) }
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: demo ? "Leave Demo Mode" : "Demo Mode", action: #selector(switchDemo), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit G-Lite", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for row in menu.items where row.action != #selector(NSApplication.terminate(_:)) { row.target = self }
+    }
+
+    // The demo (every device Windows' --demo lists, simulated) as a relaunch with --demo, and back.
+    @objc private func switchDemo() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = (demo ? [] : ["--demo"]) + ["--relaunched"]
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            DispatchQueue.main.async { if error == nil { NSApp.terminate(nil) } }
+        }
     }
 
     @objc private func openDevice(_ sender: NSMenuItem) {
@@ -222,9 +237,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
+        let demoItem = NSMenuItem(title: demo ? "Leave Demo Mode" : "Demo Mode", action: #selector(switchDemo), keyEquivalent: "")
+        demoItem.target = self
         add("G-Lite", [
             NSMenuItem(title: "About G-Lite", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""),
-            .separator(), settingsItem, .separator(),
+            .separator(), settingsItem, demoItem, .separator(),
             NSMenuItem(title: "Hide G-Lite", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"),
             NSMenuItem(title: "Quit G-Lite", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"),
         ])
@@ -293,10 +310,21 @@ if arguments.contains("--scan") {
     }
     exit(0)
 }
-if let me = Bundle.main.bundleIdentifier,
-   NSRunningApplication.runningApplications(withBundleIdentifier: me).contains(where: { $0 != .current }) { exit(0) }
+// One G-Lite at a time; one relaunched for or out of the demo waits up to 5 s for the one before to quit.
+if let me = Bundle.main.bundleIdentifier {
+    func others() -> Bool { NSRunningApplication.runningApplications(withBundleIdentifier: me).contains { $0 != .current } }
+    var waited = 0
+    while arguments.contains("--relaunched") && others() && waited < 50 { usleep(100_000); waited += 1 }
+    if others() { exit(0) }
+}
 let app = NSApplication.shared
-if arguments.contains("--demo") { Log.folder = FileManager.default.temporaryDirectory }
+if arguments.contains("--demo") {
+    // The demo devices have real devices' names, so their settings and backups are kept apart, never sent to a real device.
+    let demoFolder = Settings.folder.appendingPathComponent("Demo")
+    try? FileManager.default.createDirectory(at: demoFolder, withIntermediateDirectories: true)
+    Settings.folder = demoFolder
+    Log.folder = FileManager.default.temporaryDirectory
+}
 let delegate = App(demo: arguments.contains("--demo"))
 app.delegate = delegate
 app.setActivationPolicy(.accessory)

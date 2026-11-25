@@ -165,6 +165,7 @@ enum SelfTest {
         bindings()
         gameMode()
         litraTry()
+        report()
         screenSetup()
         liveEffects()
         mice()
@@ -608,6 +609,47 @@ enum SelfTest {
               && Bindings.names(hero, 11)[5] == "Sniper" && Bindings.names(FoundDevice(), 5)[4] == "Button 5"
               && Bindings.describe(Bindings.key(8, KeyPresses.usages[0x00]!)) == "Win + A",
               "factory special bindings (90 xx FF FF) are named, keystrokes read as their keys, and the G502 HERO gets the G502's button names")
+    }
+
+    // The device report (app/SelfTest.cs's report checks): what it reads, and that every call it makes is a read.
+    static func report() {
+        var calls: [String] = []
+        func onlyReads() -> Bool {
+            calls.allSatisfy { line in
+                let parts = line.components(separatedBy: " ").filter { !$0.isEmpty }
+                guard parts.count >= 2, let feature = Int(parts[0], radix: 16), let fn = Int(parts[1].dropFirst(2), radix: 16) else { return false }
+                // The tap drops trailing zeros, so a call with none left had only zeros.
+                let parameters = parts.dropFirst(2).compactMap { UInt8($0, radix: 16) }
+                return Report.isRead(feature, fn, parameters.isEmpty ? [0] : parameters)
+            }
+        }
+        func found(_ name: String, _ kind: String, _ features: [Int]) -> FoundDevice {
+            let device = FoundDevice(); device.name = name; device.kind = kind; device.link = "LIGHTSPEED"; device.index = 1
+            device.features = features; return device
+        }
+        Hidpp.tap = { calls.append($0) }
+        let g915 = Report.build(FakeG915(), found("G915 TKL LIGHTSPEED Wireless RGB Mechanical Gaming Keyboard", "keyboard",
+                                                  [0x4540, 0x8040, 0x8071, 0x8100]), "LiveKeyboardPage")
+        let g915Reads = onlyReads()
+        calls = []
+        let mouse = Report.build(FakeMouse.g502(), FakeMouse.found(), "MousePage")
+        let mouseReads = onlyReads()
+        Hidpp.tap = nil
+        check(g915.contains("0000=000101FF000201FF000301FF") && g915.contains("0001=0100") && g915.contains("0101=0100")
+              && g915.contains("cluster 0 effect 0=") && g915.contains("Screen    LiveKeyboardPage") && g915Reads,
+              "the G915 report reads the profiles its directory lists and its effects, and only reads")
+        check(mouse.contains("dpi list=") && mouse.contains("0101=") && mouseReads, "the mouse report reads its DPI and profiles, and only reads")
+        let headsetDevice = found("PRO X Wireless Gaming Headset", "headset", [0x8300, 0x1F20])
+        headsetDevice.index = 0xFF
+        let headset = Report.build(FakeHeadset(), headsetDevice, "HeadsetPage")
+        check(headset.contains("sidetone=1E") && headset.contains("%, 3926 mV"), "the headset report reads sidetone and the battery")
+        let g9x = Report.registers(FakeG9x(), FakeG9x.found(), "MousePage")
+        check(g9x.contains("HID++ 1.0 registers") && g9x.contains("page 02"), "the G9x report reads its registers and flash pages")
+        check(Report.reads[0x8100].map { Set($0).isDisjoint(with: [1, 3, 6, 7, 8, 0xC]) } == true
+              && Report.reads[0x8101].map { Set($0).isDisjoint(with: [2, 3, 6, 7]) } == true
+              && Report.reads[0x8071]?.contains(1) == false && Report.reads[0x8070]?.contains(3) == false
+              && Report.isRead(0x8071, 8, [0, 0, 0]) && !Report.isRead(0x8071, 8, [1, 1, 0]) && !Report.isRead(0x8071, 5, [1, 0, 0]),
+              "the report never calls a write function")
     }
 
     // Try effect on the Litra Beam LX (app/LitraProtocol.cs).

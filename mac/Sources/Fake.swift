@@ -267,16 +267,60 @@ final class FakeMouse: Hidpp {
     }
 
     // A PRO X SUPERLIGHT 2: Featherweight's 0x8100 fn 0 reply (format 7, 255-byte sectors, 5 buttons), docs/newer-mice.md.
-    static func proX2() -> FakeMouse {
+    static func proX2() -> FakeMouse { wider("8001000180010002800100048001000880010010") }
+
+    // A PRO X 2 DEX, the same format; the thumb buttons swapped to show the bindings come from the profile.
+    static func dex() -> FakeMouse { wider("8001000180010002800100048001001080010008") }
+
+    private static func wider(_ buttons: String) -> FakeMouse {
         let mouse = FakeMouse()
         mouse.wide = true; mouse.zoneCount = 0; mouse.info = "0107010501051000ff0a04"; mouse.dpi = 800; mouse.stage = 1; mouse.rate = 3
         var profile = [UInt8](repeating: 0xFF, count: 255)
         profile.replaceSubrange(0..<29, with: Backups.bytes("03030100" + "9001900102" + "2003200302" + "4006400602" + "800C800C02" + "0000000000"))
-        profile.replaceSubrange(0x30..<0x44, with: Backups.bytes("8001000180010002800100048001000880010010"))
+        profile.replaceSubrange(0x30..<0x44, with: Backups.bytes(buttons))
         MouseProtocol.writeChecksum(&profile)
         mouse.sectors[0x0001] = profile
         mouse.sectors[0x0101] = profile
         return mouse
+    }
+
+    // A G502 X PLUS: profile format 5 with the G502 X LIGHTSPEED's counts, stages and factory bindings (docs/G502X.md), a write counter
+    // at 0x12 and lights on 0x8071 only, so no 0x8070 zones (Solaar's G502 X PLUS 4099 report).
+    static func g502XPlus() -> FakeMouse {
+        let mouse = FakeMouse()
+        mouse.info = "01050105020B1000ff0a04"; mouse.wheel = true; mouse.zoneCount = 0; mouse.dpi = 1600; mouse.stage = 2
+        mouse.bind(["80010001", "80010002", "80010004", "80010008", "90070000", "80010010", "90010000", "90020000", "900A0000",
+                    "90030000", "90040000"], [0x0001, 0x0101])
+        for sector in [0x0001, 0x0101] {
+            for (i, value) in [800, 1200, 1600, 2400, 3200].enumerated() {
+                mouse.sectors[sector]![3 + 2 * i] = UInt8(value & 0xFF); mouse.sectors[sector]![4 + 2 * i] = UInt8(value >> 8)
+            }
+            mouse.sectors[sector]!.replaceSubrange(0x12..<0x14, with: [0x00, 0x12])
+            mouse.sectors[sector]!.replaceSubrange(0x1C..<0x20, with: [0x3C, 0x00, 0x2C, 0x01])
+        }
+        MouseProtocol.writeChecksum(&mouse.sectors[0x0001]!)
+        return mouse
+    }
+
+    // A G305 that runs its factory profile, from an owner's report (app/Fake.cs).
+    static func g305() -> FakeMouse {
+        let mouse = FakeMouse(fresh: true)
+        mouse.zoneCount = 1; mouse.info = "0103010101060600ff0a02"; mouse.dpi = 800; mouse.stage = 1
+        mouse.sectors[0x0101] = Backups.bytes("010100900120034006800C0000FFFFFFFF00FFFFFFFFFFFFFFFFFFFFFFFFFFFF800100018001000280010004800100088001001090050000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000001F400000000000000000001F40000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
+        return mouse
+    }
+
+    // Each demo mouse its variant, as app/Fake.cs's For picks them.
+    static func forDevice(_ found: FoundDevice) -> FakeMouse {
+        if found.has(0x2202) { return found.wirelessId == 0x40B8 ? dex() : proX2() }
+        if found.models.contains("C08B") { return hero() }
+        switch found.wirelessId {
+        case 0x407F: return g502()
+        case 0x4074: return g305()
+        case 0x4093: return superlight()
+        case 0x4099: return g502XPlus()
+        default: return FakeMouse()
+        }
     }
 
     // The DPI button under the wheel: the next stage, as the mouse does on its own before it sends 0x8100 event fn 1.
@@ -376,7 +420,8 @@ final class FakeMouse: Hidpp {
 // An in-memory G915 TKL for --demo and the self-test (app/Fake.cs, FakeG915): two clusters with the older effect ids, and profile 1
 // of an owner's keyboard (Cycle at 10 s, power save after 60 s, off after 300 s) with its factory copy (Cycle at 5 s).
 final class FakeG915: Hidpp {
-    static let index: [Int: UInt8] = [0x8071: 10, 0x8040: 20, 0x8100: 21, 0x4540: 16, 0x8081: 11, 0x4522: 8]
+    var index: [Int: UInt8] = [0x8071: 10, 0x8040: 20, 0x8100: 21, 0x4540: 16, 0x8081: 11, 0x4522: 8]
+    var gameBitmap = [UInt8](repeating: 0, count: 16)
     // The Game mode list (0x4522): usages added with fn 1, all cleared with fn 3.
     var gameKeys = Set<Int>()
     var ids: [[UInt8]] = [[0x00, 0x01, 0x03, 0x0A], [0x00, 0x01, 0x0A, 0x03, 0x04, 0x0B, 0x0C]]
@@ -403,6 +448,15 @@ final class FakeG915: Hidpp {
         sectors[3] = FakeG915.recolored(sectors[1]!, "010000FF")
     }
 
+    // A G512 X 75 (app/Fake.cs, G512X): its own indexes, 0x8101 instead of 0x8100, the Game mode bitmap (0x1B10 and 0x4523, the
+    // G515's control list) and the newer effect ids.
+    static func g512x() -> FakeG915 {
+        let fake = FakeG915()
+        fake.index = [0x8071: 6, 0x8081: 7, 0x8040: 8, 0x8101: 9, 0x4540: 10, 0x1B10: 11, 0x4523: 12]
+        fake.ids = [[0x00, 0x01, 0x0A, 0x15, 0x16, 0x17, 0x18], [0x00, 0x01, 0x0A, 0x15, 0x16, 0x18]]
+        return fake
+    }
+
     static func recolored(_ profile: [UInt8], _ record: String) -> [UInt8] {
         var copy = profile
         for at in stride(from: 0xD0, to: 0xE6, by: 11) {
@@ -427,9 +481,13 @@ final class FakeG915: Hidpp {
         var reply = [UInt8](repeating: 0, count: 16)
         let padded = parameters + [UInt8](repeating: 0, count: 16)
         func readUInt16(_ at: Int) -> Int { Int(padded[at]) << 8 | Int(padded[at + 1]) }
-        let index = FakeG915.index
+        let index = self.index
         if featureIndex == 0 {
             reply[0] = index[readUInt16(0)] ?? 0
+        } else if featureIndex == index[0x1B10] {
+            FakeG515.controls(fn, padded, &reply)
+        } else if featureIndex == index[0x4523] {
+            if fn == 0 { gameBitmap = Array(padded.prefix(16)) }
         } else if featureIndex == index[0x4540] {
             reply[0] = 1
         } else if featureIndex == index[0x4522] {

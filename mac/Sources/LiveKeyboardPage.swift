@@ -506,6 +506,8 @@ final class LiveKeyboardPage: DevicePage {
     private func showStatus() {
         if takenOver { status.show("G HUB or another app has taken over the keyboard. Close it to save.", error: true); return }
         if live { status.show(runner?.problem ?? "A live effect runs while G-Lite does: the keyboard doesn't keep it"); return }
+        // A keyboard that doesn't save can't say what it runs either, so it says nothing until G-Lite sets it (Windows' ClearStatus).
+        if !kind.profile { status.show(unknownStored && !dirty ? "" : "Set by G-Lite, not saved to the keyboard"); return }
         let place = slots.contains(running) && slots.count > 1 ? "M\(running)" : "the keyboard"
         status.show(unknownStored && !dirty ? "The keyboard runs an effect G-Lite doesn't know."
                     : dirty ? "Not saved on the keyboard yet" : gKeysChanged ? "G keys not saved to \(place)" : "")
