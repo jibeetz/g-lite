@@ -3,3 +3,4 @@ app/build/
 backup-*/
 *.reg
 app/tests/*.fail.txt
+mac/build/
