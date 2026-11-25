@@ -306,8 +306,8 @@ enum Devices {
         }
     }
 
-    // shortcut: HID++ 1.0 devices (G9x, G500, G700) and the plain HID ones (G510, G600, G300, headsets on their own transport) aren't
-    // looked for yet; port app/Devices.cs's ProbeHidpp10 and FindPlainHid when their screens come over.
+    // A HID++ 2.0 device at 0xFF, else the receiver's slots (HID++ 2.0 or 1.0, probeHidpp10), else an old HID++ 1.0 USB device at
+    // index 0; the plain HID devices are found apart (plainDevices).
     static func scanPort(_ port: Port) throws -> [FoundDevice] {
         let probe = try Probe(port)
         if probe.ping(0xFF, 800) >= 2 {

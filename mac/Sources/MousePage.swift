@@ -1,9 +1,8 @@
 import AppKit
 
 // The mouse screen (app/MousePage.cs): lighting and sensitivity sent live, Save to mouse writes the active onboard profile after a
-// backup, and the Backups menu restores one or the factory profile.
-// shortcut: the mouse's own
-// DPI button (0x8100 event fn 1) isn't followed until the next load; buttons are kept as read and saved back unchanged.
+// backup, and the Backups menu restores one or the factory profile. The Bindings view sets the buttons, saved with the profile; the
+// mouse's own DPI button and profile changes are followed (0x8100 events).
 final class MousePage: DevicePage {
     private let mouse: MouseDriver
     private var current = MouseSettings(), stored: MouseSettings?, sent: MouseSettings?
