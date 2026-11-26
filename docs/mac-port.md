@@ -92,6 +92,9 @@ size (868 x 730).
     once read, the Easy-Switch picker showing where the device went and the device read again when it comes back; the reports read
     0x40A3, 0x4521 and 0x1B04 fn 2; the ISO picture built from any \, Enter and Shift width; the demo's Mini. Windows' Logi Options+ row in
     Settings' Services isn't ported (the Mac has no Services box); the Mac looks for Logi Options+ by its app and process name.
+22. **Fixes after trying the MX Mechanical Mini** (2026-11-26): turning the backlight on again sends the level shown (turned off,
+    the Mini reads its stored level as 0, so it stayed dark); the device's picture and the sections keep the window's usual width,
+    centred, in full screen, where a key picture grew with the window and pushed the rows out of sight.
 
 ## Tested on real devices
 
@@ -99,6 +102,7 @@ size (868 x 730).
 |---|---|---|
 | MX Keys S, LIFT (Bluetooth) | `--scan`, then the other devices' screen | Read correctly; the backlight and DPI changed by the user read back as set |
 | MX Keys S backlight (0x1982) | the screen, and direct writes | On, off, Automatic and Level taken at once and read back; the fade delays read back as set (the keys actually fading after them not watched). Plugged in, the keys light up only at the next key press, as the screen's note says |
+| MX Mechanical Mini (Bluetooth, firmware 72.03) | `--scan`, then the screen | Read correctly (level 7 of 7, Static, battery saving, F1–F12 as media keys), its ISO picture shown; on, off, level and effect sent and taken. Its fade delays read 5 s, so it goes dark 5 s after each change |
 | Demo Mode | the menu bar item's Demo Mode and Leave Demo Mode, clicked | Relaunches into the demo and back |
 | Menu bar item, sidebar | used | Battery on the same line as a long name; G-Lite section stays at the bottom |
 | Screen capture and sound | `--screen` | Colours of the areas and audio bands correct (sound checked with `afplay`) |
@@ -109,8 +113,8 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 - **A receiver (C547 and others)**: the code assumes macOS shows the receiver's HID++ interface as one IOHIDDevice with both FF00
   collections. If that's wrong, nothing behind a receiver is found.
-- **MX keyboards' new rows on the real MX Keys S**: its picture, F1–F12 and the disabled keys were written for it on Windows, but the
-  Mac has only read its backlight so far.
+- **MX keyboards' new rows**: on the Mini, F1–F12, the disabled keys and battery saving not sent yet; on the MX Keys S, its picture,
+  F1–F12 and the disabled keys (written for it on Windows; the Mac has only read its backlight so far).
 - **Every G device**: G515, G915 family, G512 X 75, zones keyboards, G560, mice, headsets, Litra, G510, G600, G300.
 - **Writes to onboard memory** (G515, G915 family, mice, G9x pages, G300): the same bytes as Windows, compared in the self-test, but
   never sent to a real device from the Mac. A backup is always made first.
