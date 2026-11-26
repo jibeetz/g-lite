@@ -27,6 +27,9 @@ final class ZonesPage: DevicePage {
     private var shownEffects: [UInt8] = []
     private lazy var layout = KeyLayout.forZones(device)
     private lazy var picture = layout.map(KeyPicture.init)
+    // The G560's, in the keyboards' picture place; framed: the screen's colours last sent, while the Screen effect runs.
+    private lazy var speakers: SpeakerPicture? = keyboard ? nil : SpeakerPicture()
+    private var framed: [Int]?
     private var frameTimer: Timer?
     // The Screen effect, on the speakers only, as on Windows: the four corners of the screen, one per zone (screen.on.<device>=1).
     private var screenKey: String { "screen.on." + device.settingsKey }
@@ -112,12 +115,23 @@ final class ZonesPage: DevicePage {
         viewPick.target = self; viewPick.action = #selector(viewPicked)
         viewPick.selectedSegment = 0
         keysPicture = picture.map { pictureBox($0) }
+        if let speakers = speakers {
+            speakers.translatesAutoresizingMaskIntoConstraints = false
+            speakers.heightAnchor.constraint(equalToConstant: 150).isActive = true
+            speakers.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+            speakers.picked = { [weak self] zone in
+                guard let self = self, self.zonePicker.isEnabled, let at = self.shownZones.firstIndex(of: zone) else { return }
+                self.picked = at + 1
+                self.refresh()
+            }
+            keysPicture = Ui.box("Live on the speakers", speakers)
+        }
         lightingBox = Ui.box("Lighting", Ui.column([lightHead, grid], spacing: 8))
         if let gameBox = gameBox { gameArea = Ui.box("Game mode", gameBox) }
         gameArea.isHidden = true
         view = Ui.page(header: header, body: (keysPicture.map { [$0] } ?? []) + [lightingBox] + (keyboard ? [gameArea] : [screenArea]),
                        status: status, buttons: [])
-        if picture != nil {
+        if picture != nil || speakers != nil {
             frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                 if self?.view.window?.isVisible == true { self?.showFrame() }
             }
@@ -160,11 +174,13 @@ final class ZonesPage: DevicePage {
     @objc private func zonePicked() { picked = max(0, zonePicker.selectedSegment); refresh() }
 
     @objc private func changed(_ sender: NSControl) {
-        guard !refreshing, let zones = zones else { return }
+        guard !refreshing else { return }
+        // The Screen effect can be turned off before the speakers answer.
         if sender === effect && !keyboard {
-            if effect.indexOfSelectedItem == shownEffects.count { startScreen(); edited(); return }
+            if effect.indexOfSelectedItem == shownEffects.count { if zones != nil { startScreen(); edited() }; return }
             if screening { stopScreen() }
         }
+        guard let zones = zones else { edited(); refresh(); return }
         func change(_ light: inout MouseLight) {
             if sender === effect, effect.indexOfSelectedItem >= 0 {
                 let id = shownEffects[effect.indexOfSelectedItem]
@@ -269,6 +285,7 @@ final class ZonesPage: DevicePage {
 
     private func sendScreen(_ colors: [Int]) {
         guard let zones = zones else { return }
+        framed = colors
         queue.async {
             guard let hidpp = try? self.connection() else { return }
             for zone in 0..<min(zones.count, colors.count) { try? ZoneLighting.setColor(hidpp, zone, zones[zone], colors[zone]) }
@@ -486,13 +503,18 @@ final class ZonesPage: DevicePage {
     // Each key lit by its zone's light: on the G213 the ids are zones, on the one-zone keyboards (the G413) every lit key is zone 0
     // (app/ZonesPage.cs, KeyZones and ShowFrame). An area that can't take zone 0's effect shows zone 0's.
     private func showFrame() {
+        if let speakers = speakers { showSpeakers(speakers); return }
         // A live effect draws the picture itself (liveTick).
         if running { return }
         guard let picture = picture, let zones = zones, let lights = current else { picture?.show([]); return }
         let seconds = Date().timeIntervalSince(clock)
+        // On a lighting-id picture every key shows the zone at the keys (0x8070 location 1, else zone 0) but the logo, which has no id:
+        // it shows the zone at the logo (location 2, the G512's second zone).
+        let keysZone = max(0, zones.firstIndex { $0[ZoneLighting.place] == 1 } ?? 0), logoZone = zones.firstIndex { $0[ZoneLighting.place] == 2 } ?? -1
         var colors: [Int] = [], marked: [Bool] = []
         for key in 0..<picture.count {
-            let id = picture.idOf(key), zone = layout?.zones == true ? id : id >= 0 ? 0 : -1
+            let id = picture.idOf(key)
+            let zone = layout?.zones == true ? id : id >= 0 ? keysZone : picture.nameOf(key) == "Logo" ? logoZone : -1
             var light: MouseLight?
             if zone >= 0 && zone < zones.count && zone < lights.count {
                 light = lights[zone].flatMap { zones[zone][Int($0.effect)] != nil ? $0 : nil } ?? lights[0]
@@ -506,6 +528,19 @@ final class ZonesPage: DevicePage {
             marked.append(picked > 0 && zone == self.zone)
         }
         picture.show(colors, marked: marked)
+    }
+
+    // The speakers' four lights: what each zone runs, or the screen's colours while the Screen effect does.
+    private func showSpeakers(_ speakers: SpeakerPicture) {
+        let seconds = Date().timeIntervalSince(clock)
+        speakers.colors = (0..<4).map { zone in
+            if screening { return framed.flatMap { zone < $0.count ? $0[zone] : nil } ?? -1 }
+            guard let zones = zones, let lights = current, zone < zones.count, zone < lights.count else { return -1 }
+            let own = lights[zone].flatMap { zones[zone][Int($0.effect)] != nil ? $0 : nil } ?? lights[0]
+            return own.map { ZoneLighting.colorAt($0, 0.5, seconds) } ?? -1
+        }
+        speakers.selected = picked > 0 && zonePicker.isEnabled ? zone : -1
+        speakers.pickable = zonePicker.isEnabled
     }
 
     private func showStatus() {
@@ -549,7 +584,7 @@ final class ZonesPage: DevicePage {
         }
         effect.removeAllItems()
         effect.addItems(withTitles: shownEffects.compactMap { self.info($0)?.name } + (keyboard ? [] : ["Screen"]))
-        effect.isEnabled = ready
+        effect.isEnabled = ready || screening
         effect.selectItem(at: screening ? shownEffects.count : shown.flatMap { light in shownEffects.firstIndex(of: light.effect) } ?? -1)
         let plain = !screening
         let hasColor = plain && info?.color == true && !monochrome, hasSpeed = plain && info?.speed == true
@@ -577,5 +612,96 @@ final class ZonesPage: DevicePage {
             }
             direction.selectItem(at: ZoneLighting.directions.firstIndex(of: light.direction) ?? 0)
         }
+    }
+}
+
+// The G560 speakers (app/ZonesPage.cs, SpeakerPicture): the front lights (zones 0 and 1) under the grilles, the back ones (2 and 3)
+// as the glow behind, up the wall; a click picks the zone, a mark under the speaker (front) or above it (back).
+final class SpeakerPicture: NSView {
+    // RGB per zone, -1 when off or unknown.
+    var colors = [-1, -1, -1, -1] { didSet { needsDisplay = true } }
+    var selected = -1 { didSet { needsDisplay = true } }
+    var pickable = false
+    var picked: ((Int) -> Void)?
+
+    override var isFlipped: Bool { true }
+
+    private var radius: CGFloat { (bounds.height - 24) * 0.36 }
+
+    private func center(_ speaker: Int) -> CGPoint {
+        CGPoint(x: bounds.midX + (speaker == 0 ? -1 : 1) * radius * 2.6, y: bounds.midY + radius * 0.18)
+    }
+
+    // A colour as the keys show it: its hue at full brightness, mixed into the unlit key colour by its brightness.
+    private static func shown(_ rgb: Int) -> NSColor {
+        let off = KeyPicture.keyOff.usingColorSpace(.sRGB) ?? .gray
+        let red = rgb >> 16 & 0xFF, green = rgb >> 8 & 0xFF, blue = rgb & 0xFF, top = max(red, green, blue)
+        if rgb < 0 || top == 0 { return off }
+        let mix = CGFloat(top) / 255
+        let lit = NSColor(srgbRed: CGFloat(red) / CGFloat(top), green: CGFloat(green) / CGFloat(top), blue: CGFloat(blue) / CGFloat(top), alpha: 1)
+        return off.blended(withFraction: mix, of: lit) ?? lit
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let radius = self.radius
+        guard radius > 1, let context = NSGraphicsContext.current?.cgContext else { return }
+        for speaker in 0..<2 {
+            let center = self.center(speaker)
+            let back = colors[2 + speaker], front = SpeakerPicture.shown(colors[speaker])
+            // The glow behind, kept inside the picture.
+            if back >= 0 && back & 0xFFFFFF != 0 {
+                let reach = min(center.y, bounds.height - center.y) - 1
+                let glow = SpeakerPicture.shown(back)
+                context.saveGState()
+                let oval = CGRect(x: center.x - radius * 1.7, y: center.y - reach, width: radius * 3.4, height: reach * 2)
+                context.addEllipse(in: oval)
+                context.clip()
+                let focus = CGPoint(x: center.x, y: center.y - radius * 0.3)
+                if let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                                             colors: [glow.withAlphaComponent(0.6).cgColor, glow.withAlphaComponent(0).cgColor] as CFArray,
+                                             locations: [0, 1]) {
+                    context.translateBy(x: focus.x, y: focus.y)
+                    context.scaleBy(x: 1.7 * radius / reach, y: 1)
+                    context.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: reach,
+                                               options: [])
+                }
+                context.restoreGState()
+            }
+            // The housing, its inner side's curve lit along its bottom.
+            let inner: CGFloat = speaker == 0 ? 1 : -1
+            let housing = CGRect(x: center.x - radius * 1.08 + inner * radius * 0.1, y: center.y - radius * 1.02, width: radius * 2.16,
+                                 height: radius * 2.12)
+            NSColor(srgbRed: 28 / 255, green: 28 / 255, blue: 30 / 255, alpha: 1).setFill()
+            NSBezierPath(ovalIn: housing).fill()
+            let arc = NSBezierPath()
+            let arcRadius = (housing.width - radius * 0.1) / 2
+            // Flipped view: angles run clockwise from the right, so 90 is the bottom.
+            arc.appendArc(withCenter: CGPoint(x: housing.midX, y: housing.midY), radius: arcRadius,
+                          startAngle: speaker == 0 ? -10 : 90, endAngle: speaker == 0 ? 90 : 190, clockwise: false)
+            arc.lineWidth = radius * 0.11
+            arc.lineCapStyle = .round
+            front.setStroke()
+            arc.stroke()
+            let grille = NSBezierPath(ovalIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+            KeyPicture.keyOff.setFill()
+            grille.fill()
+            NSColor.separatorColor.setStroke()
+            grille.lineWidth = 1
+            grille.stroke()
+            if selected == speaker || selected == 2 + speaker {
+                let markY = selected == speaker ? center.y + radius * 1.02 + 6 : center.y - radius * 1.02 - 9
+                let mark = NSBezierPath(roundedRect: CGRect(x: center.x - radius * 0.5, y: markY, width: radius, height: 3), xRadius: 1.5, yRadius: 1.5)
+                NSColor.controlAccentColor.setStroke()
+                mark.lineWidth = 2
+                mark.stroke()
+            }
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard pickable else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let speaker = point.x < bounds.midX ? 0 : 1
+        picked?(point.y > center(speaker).y ? speaker : 2 + speaker)
     }
 }

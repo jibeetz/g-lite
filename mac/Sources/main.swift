@@ -82,6 +82,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         screens.append(("g515-game", .device("demo|g515")))
         screens.append(("g915-game", .device("demo|g915")))
         screens.append(("g515-report", .device("demo|g515")))
+        screens.append(("g510-keys", .device("demo|g510")))
+        screens.append(("g510-game", .device("demo|g510")))
         var next = 0
         Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [unowned self] timer in
             // An open sheet (the device report) is drawn instead of the page under it.
@@ -100,6 +102,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if screens[next].0 == "g915-keys" { (self.window.page("demo|g915") as? LiveKeyboardPage)?.showKeys() }
             if screens[next].0 == "g515-game" { (self.window.page("demo|g515") as? KeyboardPage)?.showGame() }
             if screens[next].0 == "g515-report" { (self.window.page("demo|g515") as? DevicePage)?.showReport() }
+            if screens[next].0 == "g510-keys" { (self.window.page("demo|g510") as? G510Page)?.showView(1) }
+            if screens[next].0 == "g510-game" { (self.window.page("demo|g510") as? G510Page)?.showView(2) }
             if screens[next].0 == "g915-game" { (self.window.page("demo|g915") as? LiveKeyboardPage)?.showGame() }
             next += 1
         }

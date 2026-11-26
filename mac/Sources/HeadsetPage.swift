@@ -1,7 +1,8 @@
 import AppKit
 import AVFoundation
 
-// The headset screen (app/HeadsetPage.cs): sidetone and auto-off, applied at once; the battery from its voltage.
+// The headset screen (app/HeadsetPage.cs): sidetone, auto-off and the equalizer (experimental), applied at once; the battery from
+// its voltage. The equalizer's bands are vertical sliders side by side, where Windows has a row each: ten rows don't fit the page.
 // Test sidetone opens the headset's microphone for 30 s (the dongle plays sidetone only while an app uses it), after the
 // microphone permission.
 // shortcut: no headset picture.
@@ -18,6 +19,21 @@ final class HeadsetPage: DevicePage {
     private var sideHead = NSTextField(), offHead = Ui.secondary("Turn off after")
     private let testButton = NSButton(title: "Test sidetone", target: nil, action: nil)
     private var microphone: MicrophoneCapture?, testTimer: Timer?
+    private static let maxBands = 15
+    private let bandSliders: [NSSlider] = (0..<maxBands).map { _ in
+        let slider = NSSlider(value: 0, minValue: -12, maxValue: 12, target: nil, action: nil)
+        slider.isVertical = true
+        slider.isContinuous = true
+        return slider
+    }
+    private let bandValues: [NSTextField] = (0..<maxBands).map { _ in Ui.value() }
+    private let bandNames: [NSTextField] = (0..<maxBands).map { _ in Ui.value() }
+    private var bandColumns: [NSView] = []
+    private let flatButton = NSButton(title: "Flat", target: nil, action: nil)
+    private var equalizerBox = NSView()
+    // A band being dragged writes RAM only; once let go, RAM and EEPROM (persistence 1). keptBands: the last written to both.
+    private var bandHeld = false
+    private var keptBands: [Int]?
 
     override func loadView() {
         sidetone.target = self; sidetone.action = #selector(sidetoneMoved)
@@ -30,7 +46,25 @@ final class HeadsetPage: DevicePage {
                                                 + "microphone, like a call or a voice chat."), testButton])
         let power = Ui.column([Ui.column([offHead, off], spacing: 4), Ui.column([Ui.secondary("Battery"), battery], spacing: 4),
                                Ui.column([Ui.secondary("Firmware"), firmware], spacing: 4)])
-        view = Ui.page(header: header, body: [Ui.box("Sound", sound), Ui.box("Power", power)], status: status, buttons: [])
+        for (i, slider) in bandSliders.enumerated() {
+            slider.tag = i
+            slider.target = self; slider.action = #selector(bandMoved(_:))
+            slider.heightAnchor.constraint(equalToConstant: 110).isActive = true
+            let column = NSStackView(views: [bandValues[i], slider, bandNames[i]])
+            column.orientation = .vertical
+            column.spacing = 4
+            column.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            for label in [bandValues[i], bandNames[i]] { label.alignment = .center }
+            bandColumns.append(column)
+        }
+        let bands = NSStackView(views: bandColumns)
+        bands.spacing = 0
+        flatButton.target = self; flatButton.action = #selector(flatClicked)
+        equalizerBox = Ui.box("Equalizer", Ui.column([
+            Ui.hint("Experimental. The headset stores these bands, but it hasn't been heard to play them yet: G HUB applies its equalizer "
+                    + "on the PC. Changes are sent to the headset right away."), bands, flatButton]))
+        equalizerBox.isHidden = true
+        view = Ui.page(header: header, body: [Ui.box("Sound", sound), Ui.box("Power", power), equalizerBox], status: status, buttons: [])
         header.show(device)
         refresh()
         load()
@@ -90,6 +124,21 @@ final class HeadsetPage: DevicePage {
         changed(now: false)
     }
 
+    @objc private func bandMoved(_ slider: NSSlider) {
+        guard var bands = current.bands, slider.tag < bands.count else { return }
+        bands[slider.tag] = slider.integerValue
+        current.bands = bands
+        let type = NSApp.currentEvent?.type
+        bandHeld = type == .leftMouseDown || type == .leftMouseDragged
+        changed(now: !bandHeld)
+    }
+
+    @objc private func flatClicked() {
+        guard let bands = current.bands else { return }
+        current.bands = [Int](repeating: 0, count: bands.count)
+        changed(now: true)
+    }
+
     @objc private func offPicked() {
         guard off.indexOfSelectedItem >= 0 else { return }
         current.autoOffMinutes = offChoices[off.indexOfSelectedItem]
@@ -111,13 +160,18 @@ final class HeadsetPage: DevicePage {
         }
     }
 
-    // The Windows text: sidetone, then the auto-off minutes.
-    override func presetText() -> String? { "\(current.sidetone),\(current.autoOffMinutes)" }
+    // The Windows text: sidetone, the auto-off minutes, then the bands.
+    override func presetText() -> String? { current.text }
 
+    // A preset's bands count only on a headset with as many; otherwise the bands stay as they are.
     override func applyPreset(_ text: String) {
-        let values = text.components(separatedBy: ",").compactMap { Int($0) }
-        guard values.count == 2 else { return }
-        current = HeadsetSettings(sidetone: max(0, min(100, values[0])), autoOffMinutes: values[1])
+        guard var settings = HeadsetSettings.fromText(text) else { return }
+        settings.sidetone = max(0, min(100, settings.sidetone))
+        let range = state?.range ?? 0
+        if let bands = settings.bands, let now = current.bands, bands.count == now.count {
+            settings.bands = bands.map { max(-range, min(range, $0)) }
+        } else { settings.bands = current.bands }
+        current = settings
         changed(now: true)
     }
 
@@ -130,7 +184,7 @@ final class HeadsetPage: DevicePage {
 
     private func send() {
         guard let state = state else { return }
-        let want = current, before = sent
+        let want = current, before = sent, held = bandHeld
         sequence += 1
         let startedAt = sequence
         run({ hidpp in
@@ -138,6 +192,11 @@ final class HeadsetPage: DevicePage {
             if state.hasSidetone && want.sidetone != before.sidetone { try HeadsetProtocol.setSidetone(hidpp, want.sidetone) }
             if state.hasOff && want.autoOffMinutes >= 0 && want.autoOffMinutes != before.autoOffMinutes {
                 try HeadsetProtocol.setOff(hidpp, want.autoOffMinutes)
+            }
+            if state.frequencies != nil, let bands = want.bands,
+               bands != before.bands || !held && bands != self.keptBands {
+                try HeadsetProtocol.setEqualizer(hidpp, bands, keep: !held)
+                if !held { self.keptBands = bands }
             }
             self.sent = want
         })
@@ -152,12 +211,18 @@ final class HeadsetPage: DevicePage {
             self.state = read
             self.current = read.set
             self.sent = read.set
+            self.keptBands = read.set.bands
             self.dirty = false
             self.refresh()
             self.status.show(!read.hasSidetone && !read.hasOff && read.millivolts == 0 ? "The headset didn't answer. Is it on?" : "Matches the headset",
                              error: !read.hasSidetone && !read.hasOff && read.millivolts == 0)
             self.loaded()
         })
+    }
+
+    static func rangeText(_ hertz: Int) -> String {
+        hertz < 50 ? "Deep bass" : hertz < 200 ? "Bass" : hertz < 400 ? "Low mids" : hertz < 1500 ? "Mids"
+            : hertz < 3000 ? "Upper mids" : hertz < 6000 ? "Presence" : hertz < 12000 ? "Treble" : "Air"
     }
 
     private func refresh() {
@@ -176,6 +241,21 @@ final class HeadsetPage: DevicePage {
         off.selectItem(at: hasOff ? offChoices.firstIndex(of: current.autoOffMinutes) ?? -1 : -1)
         off.isEnabled = hasOff
         Ui.dim(offHead, !hasOff)
+        let frequencies = state?.frequencies ?? [], range = state?.range ?? 12
+        let bandCount = current.bands == nil ? 0 : min(HeadsetPage.maxBands, frequencies.count)
+        equalizerBox.isHidden = bandCount == 0
+        for i in 0..<HeadsetPage.maxBands {
+            bandColumns[i].isHidden = i >= bandCount
+            guard i < bandCount, let band = current.bands?[i] else { continue }
+            let hertz = frequencies[i]
+            bandNames[i].stringValue = hertz >= 1000 ? String(format: "%g", Double(hertz) / 1000) + "k" : "\(hertz)"
+            bandNames[i].toolTip = HeadsetPage.rangeText(hertz)
+            bandSliders[i].minValue = Double(-range); bandSliders[i].maxValue = Double(range)
+            bandSliders[i].integerValue = band
+            bandSliders[i].setAccessibilityLabel(hertz >= 1000 ? String(format: "%g kHz", Double(hertz) / 1000) : "\(hertz) Hz")
+            bandValues[i].stringValue = (band > 0 ? "+" : "") + "\(band) dB"
+        }
+        flatButton.isEnabled = current.bands?.contains { $0 != 0 } == true
         firmware.stringValue = device.firmware.isEmpty ? "–" : device.firmware
         let millivolts = state.map { $0.millivolts > 0 ? $0.millivolts : device.millivolts } ?? device.millivolts
         let charging = state?.charging == true

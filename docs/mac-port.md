@@ -10,7 +10,8 @@ The code is in `mac/`; how it's organised, file by file, is in the Mac section o
   Windows, so a `settings.txt` or a preset written by one reads on the other.
 - `mac/build.sh` builds a universal `G-Lite.app` (arm64 and x86_64, macOS 12 and up), runs `GLite --selftest` first and stops if it
   fails, signs the app, then quits the running copy and installs it in `/Applications` (or `~/Applications`).
-- Every device family Windows supports has its screen. Nothing on Windows' feature list is left to port.
+- Every device family Windows supports has its screen, with Windows' features up to 0.1.0-beta. Its new rows layout isn't ported
+  (see [Known differences](#known-differences-from-windows)).
 - Almost everything is tested only on fake devices (`--demo`, the self-test). See [Tested on real devices](#tested-on-real-devices).
 
 ## Building and running
@@ -61,8 +62,8 @@ Windows had was ported one after the other.
 15. **Last pieces**: the Litra's live picture and Try effect, the headset's Test sidetone, the key picture's icons, the drag rectangle,
     the Game view's legends in the Mac's keyboard layout.
 16. **Report and demo**: the device report (Report at the right of each device screen's title: what G-Lite reads from the device,
-    read only, to copy or send in a GitHub issue when adding a device); the demo with every device Windows' demo lists (33, plus the
-    G213), reachable from the menus (Demo Mode), its settings kept apart from the real devices'.
+    read only, to copy or send in a GitHub issue when adding a device); the demo with every device Windows' demo lists, reachable
+    from the menus (Demo Mode), its settings kept apart from the real devices'.
 
 UI fixes along the way: title height, box margins and centring, sidebar icons of fixed width, every screen kept within Windows' window
 size (868 x 730).
@@ -76,6 +77,12 @@ size (868 x 730).
 18. **The games' easter egg** (`Games.swift`): a click on the sidebar's G-Lite heading opens the virtual G515 TKL with Blocks, Snake
     and Mines, as Windows' G-Lite title does. Windows' version shows the fake keyboard's effect; the Mac's shows only the factory
     animation's rainbow (what Windows shows there too, its fake keyboard being new each time).
+19. **Sync with Windows 0.1.0-beta** (2026-11-26): the PRO X's equalizer (experimental; vertical sliders, since ten rows don't fit
+    the page); the G510's M1 to M3 with their own lighting and G key bindings, its picture, Bindings and Game views (the Game mode
+    switch from input report 03); pictures for the G PRO keyboard, G410, G810 and G910 (with the live effects and Game view, experimental)
+    and the G560; mice drawn in their shapes (PRO family, DEX, G502); the Litra's bar centred; an added Screen area makes equal strips;
+    the G300's Save refuses when the mouse changed profile and keeps a level's DPI it can't take; after a mouse Restore, `01` follows
+    unless `02` was refused; the G560's Screen effect can be turned off before the speakers answer; the demo's six new keyboards.
 
 ## Tested on real devices
 
@@ -111,6 +118,8 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 ### Known differences from Windows
 
+- Windows 0.1.0-beta lays out every screen in rows (a setting per row under section titles, the picture at the top), has a resizable
+  window and an accent colour. The Mac keeps its boxes and fixed window; the features are the same.
 - The MX Keys S's own support is being added on Windows; it comes to the Mac at the next sync.
 - The click on Windows' G-Lite title opens the games, not the demo; the demo is `--demo` only on Windows, and Demo Mode in the menus on
   the Mac.

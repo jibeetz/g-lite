@@ -5,7 +5,13 @@ using System.Collections.Generic;
 static class SelfTest
 {
     static readonly string[] LayoutFiles =
-        { "g515-tkl.json", "g915-tkl.json", "g915.json", "g915-x.json", "g915-x-tkl.json", "g815.json", "g512-x-75.json", "g-full.json", "g-60.json", "g213.json", "g413.json" };
+        { "g515-tkl.json", "g915-tkl.json", "g915.json", "g915-x.json", "g915-x-tkl.json", "g815.json", "g512-x-75.json", "g-full.json", "g-60.json", "g213.json", "g413.json", "g510.json", "g-pro.json", "g410.json", "g810.json", "g910.json" };
+
+    static bool LightsM3(FakeG510 keyboard)
+    {
+        G510Keys.LightBank(keyboard, 2);
+        return keyboard.Features[0x04][1] == 0x20 && G510Keys.LitBank(keyboard, 0) == 2;
+    }
 
     static byte[] Hex(string hex)
     {
@@ -603,6 +609,16 @@ static class SelfTest
         catch (RefusedException) { rightRefused = true; }
         Check(rightRefused, "G300: a change to the right button is refused, not dropped");
         Check(g300Refused, "G300: a DPI it can't take is refused");
+        var unreadLevel = (byte[])g300Report.Clone();
+        // Byte 4 is level 2, the default: 0x80 alone reads as 0 DPI.
+        unreadLevel[4] = 0x80;
+        Check(G300Mouse.Build(unreadLevel, new MouseSettings { Dpi = 0, Stage = 1, Light = new MouseLight { Effect = 0x01, Color = 0xFF0000 } })[4]
+                == 0x80,
+            "G300: a level read outside 250 to 2500 DPI stays as it was when a save changes something else");
+        bool otherProfileRefused = false;
+        try { new G300Mouse().Save(new FakeG300 { Profile = 0 }, g300, g300Report, new MouseSettings { Dpi = g300.Dpi, Stage = g300.Stage }); }
+        catch (RefusedException) { otherProfileRefused = true; }
+        Check(otherProfileRefused, "G300: Save refuses when the mouse's profile button moved it off the profile shown");
         var g600Report = new FakeG600().Modes[2];
         var g600 = G600Mouse.Decode(g600Report, 3);
         Check(g600.ReadOnly && !g600.Writable && g600.Stages.SequenceEqual(new[] { 400, 1200, 2000, 3200 }) && g600.Stage == 3
@@ -790,6 +806,15 @@ static class SelfTest
                 .Same(new G510Settings { Effect = G510Settings.Cycle, Period = 3000 })
             && G510Settings.FromText("1,FF0000,100").Effect == G510Settings.Static,
             "the G510 gets its screen only when its vendor collection was found, and its backlight is the colour scaled by brightness");
+        var g510Keys = G510Keys.FromText("80020105 800300E9 nonsense");
+        var g510Switch = new FakeG510 { GameMode = true };
+        Check(g510Keys.Length == 18 && G510Keys.ToText(g510Keys).StartsWith("80020105 800300E9 80000000 ")
+            && G510Keys.FromText(G510Keys.ToText(g510Keys)).Zip(g510Keys, (x, y) => x.SequenceEqual(y)).All(same => same)
+            && G510Keys.GameMode(g510Switch) && !G510Keys.GameMode(new FakeG510())
+            && G510Keys.LitBank(g510Switch, 2) == 0 && LightsM3(g510Switch)
+            && KeyLayout.Load("g510.json").KeyIds().Count(id => id >= 0) == 18 + 104,
+            "the G510's G key bindings read back from their text, unbound keys as Disabled; its Game mode switch is bit 2 of byte 3 of "
+                + "input report 03; M1 to M3 light as 80, 40 and 20 in feature 04; its picture lights the 18 G keys and the 104 others");
         var g500s = FakeG9x.G500s();
         var g500sState = G9xRegisters.Read(g500s, G9xModel.G500s);
         G9xRegisters.SetDpi(g500s, 8200, G9xModel.G500s);
@@ -1127,6 +1152,13 @@ static class SelfTest
         Check(ScreenSettings.FromText("garbage;zones:x").Zones.Count == 4 && ScreenSettings.FromText("ms:5000").Interval == 1000,
             "bad screen setup text falls back to defaults");
         Check(screen.Add() == -1, "at most five zones");
+        var stripes = new ScreenSettings();
+        stripes.Zones[1].Area = new System.Drawing.RectangleF(0.3f, 0.1f, 0.4f, 0.2f);
+        stripes.Add();
+        Check(Enumerable.Range(0, 5).All(i => Math.Abs(stripes.Zones[i].Area.X - i * 0.2f) < 0.001f
+                && Math.Abs(stripes.Zones[i].Area.Width - 0.2f) < 0.001f)
+            && Math.Abs(stripes.Zones[1].Area.Y - 0.1f) < 0.001f && Math.Abs(stripes.Zones[4].Area.Height - 0.35f) < 0.001f,
+            "an added zone makes every zone an equal strip, left to right with the new one at the right, each keeping its height");
         screen.Remove(3);
         Check(screen.Zones.Count == 4 && screen.Keys[0x26] == 2, "removing a zone moves its keys to the zone before");
         Check(screen.ZoneOf(0x01, 0.1f) == 0 && screen.ZoneOf(0x01, 0.99f) == 3 && screen.ZoneOf(0x26, 0.1f) == 2,

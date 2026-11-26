@@ -10,6 +10,20 @@ using System.Windows.Forms;
 // only applies while Game mode is on. The keyboard keeps it until it loses power, so G-Lite sends it again at each load.
 static class GameModeKeys
 {
+    // The picture the Game view's keys are picked on, ids passed to IdPicked; the keys the keyboard turns off itself are marked fixed.
+    // The G915s' Fn key has the id the right Windows key has on the G815, and stays on.
+    public static KeyPicture Picture(KeyLayout keys, bool controlBitmap)
+    {
+        var picture = new KeyPicture(keys) { Picking = true, GameModeKey = "Game", AccessibleName = "Game mode keys" };
+        var keyNames = keys.KeyNames();
+        var keyIds = keys.KeyIds();
+        picture.FixedIds = controlBitmap ? new HashSet<int>() : new HashSet<int>(keyIds.Where((id, key) =>
+            id >= 0 && AlwaysOff.Contains(Usage(id)) && keyNames[key] != "Fn"));
+        picture.CanPick = id => CanPick(Usage(id), controlBitmap);
+        picture.Label = (id, name) => Typed(Usage(id)) ?? name;
+        return picture;
+    }
+
     public static readonly int[] AlwaysOff = { 0xE3, 0xE7, 0x65 };
 
     // Lighting ids are USB usages minus 3 (KeyLayout.Iso), except the modifiers, 0x68-0x6F for usages E0-E7.
@@ -181,56 +195,5 @@ static class GameModeKeys
             return virtualKey == 0 || typed == 0 ? null : char.ToUpperInvariant((char)typed).ToString();
         }
         catch (Exception) { return null; }
-    }
-}
-
-// The Game view's box, on KeyboardPage and ZonesPage: what Game mode does, the keyboard to pick keys on, and Clear. The page keeps
-// the list (settings, presets) and sends it; Picked gives the usage of a key clicked, Cleared the Clear button.
-class GameModeBox : RoundedBox
-{
-    readonly KeyPicture picture;
-    readonly FlatButton clear;
-    public event Action<int> Picked;
-    public event Action Cleared;
-
-    public GameModeBox(KeyLayout keys, string note, bool controlBitmap)
-    {
-        Visible = false;
-        Ui.Text(this, "Game mode", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        var noteText = Ui.Text(this, note, 14, 36, () => Theme.Dim, 9f);
-        noteText.AutoSize = false;
-        noteText.Size = new Size(588, 56);
-        // Tall enough that the width limits the keys, so the picture spans the box like the Clear button's column below.
-        picture = Ui.Add(this, new KeyPicture(keys) { Picking = true, GameModeKey = "Game" }, 14, 96, 588, 210);
-        picture.AccessibleName = "Game mode keys";
-        // The G915s' Fn key has the id the right Windows key has on the G815, and stays on.
-        var keyNames = keys.KeyNames();
-        var keyIds = keys.KeyIds();
-        picture.FixedIds = controlBitmap ? new HashSet<int>() : new HashSet<int>(keyIds.Where((id, key) =>
-            id >= 0 && GameModeKeys.AlwaysOff.Contains(GameModeKeys.Usage(id)) && keyNames[key] != "Fn"));
-        picture.CanPick = id => GameModeKeys.CanPick(GameModeKeys.Usage(id), controlBitmap);
-        picture.Label = (id, name) => GameModeKeys.Typed(GameModeKeys.Usage(id)) ?? name;
-        picture.IdPicked += id => { if (Picked != null) Picked(GameModeKeys.Usage(id)); };
-        clear = Ui.Add(this, new FlatButton { Text = "Clear", AccessibleName = "Clear the Game mode keys" },
-            14, 318, 100, 32);
-        clear.Click += (s, e) => { if (Cleared != null) Cleared(); };
-        picture.Resize += (s, e) => AlignClear();
-        AlignClear();
-    }
-
-    public void SetModel(KeyLayout model)
-    {
-        picture.SetModel(model);
-        AlignClear();
-    }
-
-    // Clear lines up with the drawn keyboard, which a narrow layout (a TKL) leaves centred in the picture.
-    void AlignClear() { clear.Left = picture.Left + picture.DrawnLeft; }
-
-    public void ShowKeys(IList<int> usages)
-    {
-        picture.PickedIds = new HashSet<int>(usages.Select(GameModeKeys.LightingId));
-        picture.Invalidate();
-        clear.Enabled = usages.Count > 0;
     }
 }

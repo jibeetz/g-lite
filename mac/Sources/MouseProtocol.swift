@@ -709,10 +709,13 @@ final class HidppMouse: MouseDriver {
         try MouseProtocol.store(hidpp, state, restored)
         if state.onboard {
             let profiles = try hidpp.featureIndex(0x8100)
-            var left = false
-            do { try hidpp.call(profiles, 1, [0x02]); left = true } catch GLiteError.hidpp {}
-            // Tried twice and not swallowed: a mouse left out of onboard mode would ignore its profiles.
-            if left { do { try hidpp.call(profiles, 1, [0x01]) } catch GLiteError.hidpp { try hidpp.call(profiles, 1, [0x01]) } }
+            var refused = false
+            var failure: Error?
+            do { try hidpp.call(profiles, 1, [0x02]) } catch GLiteError.hidpp { refused = true } catch { failure = error }
+            // `01` follows unless `02` was refused, even when `02` timed out and may have been taken: tried twice and not swallowed,
+            // since a mouse left out of onboard mode would ignore its profiles.
+            if !refused { do { try hidpp.call(profiles, 1, [0x01]) } catch GLiteError.hidpp { try hidpp.call(profiles, 1, [0x01]) } }
+            if let failure = failure { throw failure }
         }
         let stage = defaultStage(restored)
         if stage < (wide ? MouseProtocol.wideStagesOf(restored) : MouseProtocol.stagesOf(restored)).count {

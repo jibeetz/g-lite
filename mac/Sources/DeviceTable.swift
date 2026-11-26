@@ -52,7 +52,7 @@ struct DeviceTable {
     }
 
     // What --demo lists: every device Windows' --demo lists (app/Program.cs, DemoDevices), with the same names, links, batteries,
-    // firmware and features, and the G213.
+    // firmware and features.
     static func demoDevices() -> [FoundDevice] {
         func device(_ key: String, _ name: String, _ kind: String, _ link: String, index: UInt8 = 0xFF, wireless: Int = 0, battery: Int = -1,
                     millivolts: Int = 0, firmware: String = "", features: [Int] = [], models: String = "", usb: Int = 0,
@@ -85,7 +85,18 @@ struct DeviceTable {
                    features: base + [0x4522, 0x4540, 0x8060, 0x8080, 0x8070]),
             device("g413", "G413 Silver Mechanical Gaming Keyboard", "keyboard", "USB", firmware: "U1 14.00, build 0008",
                    features: base + [0x4522, 0x4540, 0x8060, 0x8070, 0x40A2]),
-            device("g213", "Gaming Keyboard G213", "keyboard", "USB", features: base + [0x8070]),
+            device("g213", "Gaming Keyboard G213", "keyboard", "USB", firmware: "U1 12.01, build 0007",
+                   features: base + [0x4522, 0x4540, 0x8060, 0x8070]),
+            device("g513", "G513 Carbon RGB Mechanical Gaming Keyboard", "keyboard", "USB", firmware: "U1 38.03, build 0015",
+                   features: base + [0x4522, 0x4540, 0x8060, 0x8080, 0x8070]),
+            device("gprokeyboard", "G PRO RGB Mechanical Gaming Keyboard", "keyboard", "USB", firmware: "U1 36.02, build 0011",
+                   features: base + [0x4522, 0x4540, 0x8060, 0x8080, 0x8070]),
+            device("g810", "G810 Orion Spectrum", "keyboard", "USB", firmware: "U1 35.04, build 0012",
+                   features: base + [0x4522, 0x4540, 0x8060, 0x8080, 0x8070]),
+            device("g910", "G910 Orion Spectrum", "keyboard", "USB", firmware: "U1 34.01, build 0009",
+                   features: base + [0x4522, 0x4540, 0x8060, 0x8080, 0x8070]),
+            device("g410", "G410 Atlas Spectrum", "keyboard", "USB", firmware: "U1 33.00, build 0008",
+                   features: base + [0x4522, 0x4540, 0x8060, 0x8080, 0x8070]),
             FakeG510.found(),
             device("mouse", "G Pro Wireless Gaming Mouse", "mouse", "LIGHTSPEED", index: 1, wireless: 0x4079, battery: 54, millivolts: 3824,
                    firmware: "MPM 15.02, build 0017", features: base + [0x1001, 0x2201, 0x8060, 0x8070, 0x8100]),

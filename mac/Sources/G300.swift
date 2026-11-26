@@ -118,8 +118,11 @@ final class G300Mouse: MouseDriver {
         var built = old
         let stage = want.stage >= 0 && want.stage < levelCount ? want.stage : defaultStageOf(built)
         let units = want.dpi / dpiUnit
-        if units < 1 || units > maxUnits || units * dpiUnit != want.dpi { throw GLiteError.refused("The G300 takes 250 to 2500 DPI in steps of 250") }
-        built[levelsAt + stage] = UInt8(units)
+        // A level's DPI as read stays, even outside 250 to 2500, so a save that changes something else isn't refused.
+        if want.dpi != Int(old[levelsAt + stage] & 0x7F) * dpiUnit {
+            if units < 1 || units > maxUnits || units * dpiUnit != want.dpi { throw GLiteError.refused("The G300 takes 250 to 2500 DPI in steps of 250") }
+            built[levelsAt + stage] = UInt8(units)
+        }
         for i in 0..<levelCount { built[levelsAt + i] = built[levelsAt + i] & 0x7F | (i == stage ? defaultFlag : 0) }
         if want.rate > 0 {
             guard let code = rateByCode.firstIndex(of: want.rate) else { throw GLiteError.refused("The G300 takes 125, 250, 500 or 1000 Hz") }
@@ -160,7 +163,12 @@ final class G300Mouse: MouseDriver {
         try G300Mouse.readReport(hidpp, Int(state.profile![0] - G300Mouse.firstProfileReport))
     }
     func setup(_ hidpp: Hidpp, _ state: MouseProtocol.State, _ want: MouseSettings) throws { throw GLiteError.refused("The G300 needs no setup") }
+    // The mouse's profile button may have moved it to another profile since the screen read this one, and Save is for the one in use.
     func save(_ hidpp: Hidpp, _ state: MouseProtocol.State, _ now: [UInt8], _ want: MouseSettings) throws {
+        let active = Int(try hidpp.getFeature(G300Mouse.activeReport)[1] >> 4)
+        if Int(G300Mouse.firstProfileReport) + active != Int(now[0]) {
+            throw GLiteError.refused("The G300 is on profile \(active + 1) now, not the one shown: nothing was saved")
+        }
         try G300Mouse.write(hidpp, try G300Mouse.build(now, want))
     }
     func restore(_ hidpp: Hidpp, _ state: MouseProtocol.State, _ now: [UInt8], _ data: [UInt8]?) throws {

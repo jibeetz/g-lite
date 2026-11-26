@@ -1,10 +1,97 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
+
+// The G560 from the front, drawn from its photos: two round speakers, each with a light under its grille on the inner side (the
+// front zone: bottom left, bottom right) and a glow behind it on the wall (the back zone: top left, top right). Zones 0 to 3 are
+// bottom left, bottom right, top left and top right (an owner's check, docs/G560.md); a click on a light picks its zone.
+class SpeakerPicture : DrawnControl
+{
+    Color[] colors = new Color[4];
+    int selected = -1;
+    bool pickable;
+    public event Action<int> Picked;
+
+    public SpeakerPicture()
+    {
+        TabStop = false;
+        AccessibleRole = AccessibleRole.Graphic;
+        AccessibleName = "Speakers";
+    }
+
+    // pick: the zone to mark, -1 for none (All); canPick: whether a click picks a zone now.
+    public void Display(Color[] zoneColors, int pick, bool canPick)
+    {
+        colors = zoneColors;
+        selected = pick;
+        pickable = canPick;
+        Cursor = canPick ? Cursors.Hand : Cursors.Default;
+        Invalidate();
+    }
+
+    float Radius { get { return (Height - 24 * DpiScale) * 0.36f; } }
+
+    PointF Center(int speaker)
+    {
+        float radius = Radius, gap = radius * 1.6f;
+        return new PointF(Width / 2f + (speaker == 0 ? -1 : 1) * (gap + radius), Height / 2f + radius * 0.18f);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var graphics = Begin(e);
+        float radius = Radius;
+        if (radius <= 1) return;
+        for (int speaker = 0; speaker < 2; speaker++)
+        {
+            var center = Center(speaker);
+            Color back = colors[2 + speaker], front = colors[speaker];
+            // The glow behind, up the wall, kept inside the picture.
+            float reach = Math.Min(center.Y, Height - center.Y) - 1;
+            using (var path = new GraphicsPath())
+            {
+                path.AddEllipse(center.X - radius * 1.7f, center.Y - reach, radius * 3.4f, reach * 2);
+                using (var brush = new PathGradientBrush(path))
+                {
+                    brush.CenterPoint = new PointF(center.X, center.Y - radius * 0.3f);
+                    brush.CenterColor = Color.FromArgb(back == Theme.KeyOff ? 0 : 150, back);
+                    brush.SurroundColors = new[] { Color.FromArgb(0, back) };
+                    graphics.FillPath(brush, path);
+                }
+            }
+            // The housing's curve on the inner side, lit along its bottom.
+            float inner = speaker == 0 ? 1 : -1;
+            var housing = new RectangleF(center.X - radius * 1.08f + inner * radius * 0.1f, center.Y - radius * 1.02f, radius * 2.16f, radius * 2.12f);
+            Ui.Fill(graphics, housing, radius * 1.08f, Color.FromArgb(28, 28, 30), Color.FromArgb(28, 28, 30));
+            using (var pen = new Pen(front, radius * 0.11f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                graphics.DrawArc(pen, housing.X + radius * 0.05f, housing.Y + radius * 0.05f, housing.Width - radius * 0.1f,
+                    housing.Height - radius * 0.1f, speaker == 0 ? -10 : 90, 100);
+            Ui.Fill(graphics, new RectangleF(center.X - radius, center.Y - radius, radius * 2, radius * 2), radius,
+                Theme.KeyOff, Theme.Border);
+            // The picked zone: a mark under its speaker (front) or above it (back).
+            if (selected == speaker || selected == 2 + speaker)
+            {
+                float markY = selected == speaker ? center.Y + radius * 1.02f + 6 * DpiScale : center.Y - radius * 1.02f - 9 * DpiScale;
+                using (var pen = new Pen(Theme.Accent, 2 * DpiScale))
+                using (var mark = Ui.Round(new RectangleF(center.X - radius * 0.5f, markY, radius, 3 * DpiScale), 1.5f * DpiScale))
+                    graphics.DrawPath(pen, mark);
+            }
+        }
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (!pickable || e.Button != MouseButtons.Left || Picked == null) return;
+        int speaker = e.X < Width / 2 ? 0 : 1;
+        Picked(e.Y > Center(speaker).Y ? speaker : 2 + speaker);
+    }
+}
 
 class ZonesPage : DevicePage
 {
@@ -24,6 +111,8 @@ class ZonesPage : DevicePage
         snapTimer = new Timer { Interval = 1000 }, frameTimer = new Timer { Interval = 50 };
     readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
     readonly KeyPicture picture;
+    // The G560's, in the keyboards' picture place.
+    readonly SpeakerPicture speakers;
     readonly KeyLayout iso;
     bool isoShown;
     volatile bool wholeAgain;
@@ -31,19 +120,18 @@ class ZonesPage : DevicePage
     volatile bool monochrome;
     // The picture's ids are zones ("kind": "zones", the G213) or lighting ids, every key then in zone 0 (the G413).
     readonly bool zonesModel;
-    readonly RoundedBox pictureBox;
-    readonly Label effectHead;
-    // One zone: the zone row is hidden and what's below it moved up, once its height in layout units.
-    bool zoneRowHidden;
-    const int ZoneRowHeight = 58;
     // Game mode keys through 0x4522, as on KeyboardPage (GameModeKeys): with a lighting-id picture. Replaced, never changed in place,
-    // since Opened reads it on the queue.
+    // since Opened reads it on the queue. The Game view picks them on a picture in the sticky picture's place.
     readonly bool gameMode;
-    readonly GameModeBox gameBox;
     readonly SegmentedPicker viewPick;
     bool gameShown;
     volatile List<int> gameKeys = new List<int>();
     string GameKeysSetting { get { return "gamemode." + found.SettingsKey; } }
+    readonly KeyPicture gamePicture;
+    readonly RoundedBox gameBox;
+    readonly Label gameHeading, gameKeysCount;
+    readonly FlatButton gameClear;
+    readonly int gameHeight;
     // The Audio effect (ZoneLighting.Audio): the capture, opened again after it fails, and the level, rising at once and falling at
     // 1.6 a second, sent in steps of 2% when it moves and every 2 s.
     readonly Timer audioTimer = new Timer { Interval = 50 };
@@ -52,13 +140,14 @@ class ZonesPage : DevicePage
     double audioLevel, audioClock;
     int audioSent = -1;
     string audioProblem;
-    // A keyboard's effects go in a dropdown (effectList) holding only those the picked zones list (shownEffects, out of effectIds).
-    // Per-key colours through 0x8080 (the G512 and G513, experimental) add G-Lite's live effects (LiveEffects), drawn key by key every
-    // 40 ms like on KeyboardPage, with the keyboard's own effect set to Off first, since a running 0x8070 effect would draw over them
-    // (OpenLogi). Intensity and direction stay at each effect's default.
+    // The effects go in a dropdown holding only those the picked zones list (shownEffects, out of effectIds), then Screen on the
+    // speakers, Audio on a keyboard. Per-key colours through 0x8080 on a keyboard with a lighting-id picture (the G512, G513, G PRO, G410, G810 and G910, experimental) give G-Lite's live effects
+    // (LiveEffects) instead of Audio, drawn key by key every 40 ms like on KeyboardPage, with the keyboard's own effect set to Off
+    // first, since a running 0x8070 effect would draw over them (OpenLogi). Intensity and direction stay at each effect's default.
+    // Screen and the live effects cover every zone, so they're listed on All only.
     readonly bool perKey;
-    readonly Dropdown effectList;
     readonly List<byte> effectIds = new List<byte>(), shownEffects = new List<byte>();
+    const byte ScreenEffect = 0xFE;
     readonly Timer liveTimer = new Timer { Interval = 40 };
     LiveEffect animation;
     byte animationId;
@@ -74,23 +163,27 @@ class ZonesPage : DevicePage
 
     internal override bool Busy { get { return debounce.Enabled; } }
 
-    readonly Label lightHead, zoneHead, colorHead, speedHead, speedValue, brightHead, brightValue, note,
-        boostValue, rateValue, screenBrightValue;
-    readonly SegmentedPicker zonePicker, effects, directions;
+    readonly Label speedValue, brightValue, boostValue, rateValue;
+    readonly SegmentedPicker zonePicker, directions;
+    readonly Dropdown effects, monitorDropdown;
     readonly ColorRow colors;
-    readonly Slider speed, bright, boost, rate, screenBright;
-    readonly RoundedBox light, areas, settingsBox;
-    readonly Dropdown monitorDropdown;
+    readonly Slider speed, bright, boost, rate;
     readonly ScreenPreview preview;
     readonly Toggle smoothToggle, lockToggle;
-    readonly List<Control> plainLight = new List<Control>();
+    // Lighting's rows in design units, those a device may not have (no zones to pick, no colour, no Wave, the Screen effect's) left
+    // out through rows; then Saving's note.
+    readonly RowLayout rows;
+    readonly RoundedBox lighting;
+    readonly int zoneRow, screenRow, monitorRow, boostRow, rateRow, smoothRow, colorRow, directionRow, pauseRow;
+    readonly RowText zoneText, effectText, colorText, directionText, brightText, speedText, pauseText;
+    const int PictureHeight = 168, PickerWidth = 336, ZonesHeight = 176, NotePadding = 14;
 
     string Remembered { get { return "lighting." + found.SettingsKey; } }
     string Saved { get { return "screen." + found.SettingsKey; } }
     string Active { get { return "screen.on." + found.SettingsKey; } }
 
-    public ZonesPage(FoundDevice found, Hidpp fake, MouseEventHandler drag)
-        : base(found, fake, drag, found.ShortName, found.Kind == "keyboard" ? "keyboard" : "device",
+    public ZonesPage(FoundDevice found, Hidpp fake)
+        : base(found, fake, found.ShortName, found.Kind == "keyboard" ? "keyboard" : "device",
             "profile." + found.SettingsKey + ".")
     {
         keyboard = found.Kind == "keyboard";
@@ -102,117 +195,68 @@ class ZonesPage : DevicePage
         setup = ZoneLighting.Screen(Settings.Get(Saved));
 
         var model = ZoneLighting.Picture(found);
+        // The picture stays above the rows, which scroll under them; without one the rows start below the header.
         if (model != null)
         {
-            pictureBox = Ui.Add(this, new RoundedBox(), 20, 118, 616, 209);
-            Ui.Text(pictureBox, "Live on the keyboard", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
             var ansi = KeyLayout.Load(model);
             zonesModel = ansi.Zones;
             iso = ansi.Iso();
-            picture = Ui.Add(pictureBox, new KeyPicture(ansi) { Live = true }, 14, 36, 588, 161);
+            picture = Ui.Add(this, new KeyPicture(ansi) { Live = true }, 20, BodyTop, Rows.Width, PictureHeight);
         }
-        light = Ui.Add(this, new RoundedBox(), 20, picture != null ? 339 : 118, 616, picture != null ? 310 : 330);
-        lightHead = Ui.Text(light, "Lighting", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        zoneHead = Ui.Text(light, "Zone", 14, 40, () => Theme.Dim, 9f);
-        zonePicker = Ui.Add(light,
-            new SegmentedPicker
-            {
-                Items = keyboard ? new[] { "All" } : new[] { "All" }.Concat(ZoneLighting.Names).ToArray(),
-                AccessibleName = "Zone", Index = 0
-            },
-            14, 58, 440, 32);
+        if (!keyboard) speakers = Ui.Add(this, new SpeakerPicture(), 20, BodyTop, Rows.Width, PictureHeight);
+        var sheet = (picture != null || speakers != null ? UseBody(BodyTop + PictureHeight + 12) : UseBody()).Sheet;
+        rows = new RowLayout(sheet);
+
+        // Before the device is read every row it may have shows; once read, the zone row goes with one zone, the colour row on a
+        // one-colour keyboard, Direction without Wave. The Screen effect's rows follow Effect on the speakers while it runs.
+        Label heading;
+        lighting = rows.Section("Lighting", out heading);
+        zoneRow = rows.Row(lighting);
+        zoneText = Rows.Row(lighting, zoneRow, "Zone", "");
+        zonePicker = Rows.Picker(lighting, zoneRow, "Zone", keyboard ? new[] { "All" } : new[] { "All" }.Concat(ZoneLighting.Names).ToArray(),
+            ZonePickerWidth(keyboard ? 1 : Count + 1));
+        zonePicker.Index = 0;
         zonePicker.Picked += index => { picked = index; RefreshControls(); };
-        effectHead = Ui.Text(light, "Effect", 14, 98, () => Theme.Dim, 9f);
-        // After the effects 0x8070 knows, those G-Lite draws: Screen on the speakers; on a keyboard Audio, or the live effects with 0x8080.
+        int effectRow = rows.Row(lighting);
+        effectText = Rows.Row(lighting, effectRow, "Effect", "What the lighting does");
+        effects = Rows.Dropdown(lighting, effectRow, "Effect");
         perKey = keyboard && picture != null && !zonesModel && found.Has(0x8080);
-        effects = Ui.Add(light,
-            new SegmentedPicker
-            {
-                Items = ZoneLighting.Effects.Select(effect => effect.Name).Concat(new[] { "Screen" }).ToArray(),
-                AccessibleName = "Effect", Visible = !keyboard
-            },
-            14, 116, 440, 32);
-        if (keyboard)
+        effectIds.AddRange(ZoneLighting.Effects.Select(effect => effect.Id));
+        if (!keyboard) effectIds.Add(ScreenEffect);
+        else if (perKey) effectIds.AddRange(LiveEffects.All.Select(effect => effect.Id));
+        else effectIds.Add(ZoneLighting.Audio.Id);
+        effects.Badge = i => Live(shownEffects[i]) || shownEffects[i] == ScreenEffect ? "Live" : null;
+        effects.Picked += i =>
         {
-            effectIds.AddRange(ZoneLighting.Effects.Select(effect => effect.Id));
-            if (perKey) effectIds.AddRange(LiveEffects.All.Select(effect => effect.Id));
-            else effectIds.Add(ZoneLighting.Audio.Id);
-            effectList = Ui.Add(light, new Dropdown { AccessibleName = "Effect" }, 14, 116, 196, 32);
-            effectList.Badge = i => Live(shownEffects[i]) ? "Live" : null;
-            effectList.Picked += i =>
-            {
-                byte id = shownEffects[i];
-                var info = InfoOf(id);
-                // A live effect's period means something else (Rain's fall, Aurora's 20 s turn), so crossing between a live effect and
-                // the keyboard's own starts at the new one's default, as on KeyboardPage.
-                Edit(edited =>
-                {
-                    bool crossed = Live(edited.Effect) != Live(id);
-                    edited.Effect = id;
-                    // Without a speed, 0, so the next effect with one starts at its default too.
-                    if (crossed) edited.Period = info.Speed ? info.DefaultPeriod : 0;
-                    if (info.Speed && (edited.Period < info.MinPeriod || edited.Period > info.MaxPeriod)) edited.Period = info.DefaultPeriod;
-                    if (Live(id)) edited.Direction = LiveEffects.DefaultDirection(id);
-                }, true);
-            };
-        }
-        effects.Picked += index =>
-        {
-            if (index == ZoneLighting.Effects.Length) { if (!screening) { ScreenOn(); Edited(); } return; }
+            byte id = shownEffects[i];
+            if (id == ScreenEffect) { if (!screening) { ScreenOn(); Edited(); } return; }
             if (screening) ScreenOff();
-            var effect = ZoneLighting.Effects[index];
+            var info = InfoOf(id);
+            // A live effect's period means something else (Rain's fall, Aurora's 20 s turn), so crossing between a live effect and
+            // the keyboard's own starts at the new one's default, as on KeyboardPage.
             Edit(edited =>
             {
-                edited.Effect = effect.Id;
-                if (effect.Speed && (edited.Period < effect.MinPeriod || edited.Period > effect.MaxPeriod))
-                    edited.Period = effect.DefaultPeriod;
+                bool crossed = Live(edited.Effect) != Live(id);
+                edited.Effect = id;
+                // Without a speed, 0, so the next effect with one starts at its default too.
+                if (crossed) edited.Period = info.Speed ? info.DefaultPeriod : 0;
+                if (info.Speed && (edited.Period < info.MinPeriod || edited.Period > info.MaxPeriod)) edited.Period = info.DefaultPeriod;
+                if (Live(id)) edited.Direction = LiveEffects.DefaultDirection(id);
             }, true);
         };
-        colorHead = Ui.Text(light, "Color", 14, 156, () => Theme.Dim, 9f);
-        colors = new ColorRow(light, 173);
-        colors.Picked += color => Edit(edited => edited.Color = color, true);
-        directions = Ui.Add(light, new SegmentedPicker { Items = ZoneLighting.DirText, AccessibleName = "Direction", Visible = false },
-            14, 174, 440, 32);
-        directions.Picked += index =>
-        {
-            int direction = ZoneLighting.Directions[index];
-            Edit(edited => edited.Direction = direction, true);
-        };
 
-        brightHead = Ui.Text(light, "Brightness", 14, 214, () => Theme.Dim, 9f);
-        brightValue = Value(light, 14, 214, 172);
-        bright = Ui.Add(light, new Slider { AccessibleName = "Brightness" }, 14, 234, 172, 24);
-        bright.Changed += (s, e) => { int brightness = Math.Max(1, bright.Value); Edit(edited => edited.Bright = brightness, false); };
-        bright.MouseUp += (s, e) => RefreshControls();
-        speedHead = Ui.Text(light, "Speed", 194, 214, () => Theme.Dim, 9f);
-        speedValue = Value(light, 194, 214, 172);
-        speed = Ui.Add(light, new Slider { AccessibleName = "Speed" }, 194, 234, 172, 24);
-        speed.Changed += (s, e) =>
-        {
-            var effect = InfoOf(Displayed().Effect);
-            int period = SpeedScale.Period(speed.Value, effect.MinPeriod, effect.MaxPeriod);
-            Edit(edited => edited.Period = period, false);
-        };
-        speed.MouseUp += (s, e) => RefreshControls();
-        note = Ui.Text(light, "G-Lite sets the lighting again when it starts and when you open the " + noun + ".",
-            14, 272, () => Theme.Dim, 9f);
-        note.AutoSize = false;
-        note.Size = new Size(588, 40);
-        plainLight.AddRange(new Control[] { colorHead, brightHead, brightValue, bright, speedHead, speedValue, speed, note });
-        plainLight.AddRange(light.Controls.Cast<Control>().Where(control => control is Swatch));
-
-        areas = Ui.Add(this, new RoundedBox { Visible = false }, 20, 292, 358, 300);
-        settingsBox = Ui.Add(this, new RoundedBox { Visible = false }, 390, 292, 246, 300);
-        Ui.Text(areas, "Screen areas", 14, 12, () => Theme.Dim, 9f);
-        var frame = Ui.Add(areas, new RoundedBox(), 14, 38, 330, 188);
-        preview = Ui.Add(frame, new ScreenPreview(), 8, 8, 314, 172);
+        screenRow = rows.Row(lighting, ZonesHeight);
+        Rows.Row(lighting, screenRow, "Zones", "");
+        // The monitor takes the row's width up to Reset, down to its bottom; the speakers' four areas are fixed, one per zone.
+        preview = Ui.Add(lighting, new ScreenPreview(), 130, screenRow + 14, Rows.Width - Rows.Inset - 66 - 12 - 130, 148);
         preview.Picked += index => { selectedZone = index; preview.Selected = index; preview.Invalidate(); };
         preview.Done += ScreenChanged;
-        var resetAreas = Ui.Add(areas, new FlatButton { Text = "Reset areas", AccessibleName = "Reset the screen areas" },
-            14, 236, 110, 30);
+        var resetAreas = Ui.Add(lighting, new FlatButton { Text = "Reset", AccessibleName = "Reset the screen areas" },
+            Rows.Width - Rows.Inset - 66, screenRow + 132, 66, 30);
         resetAreas.Click += (s, e) => { setup.Zones = ZoneLighting.ScreenZones(); selectedZone = 0; ScreenChanged(); };
-        Ui.Text(settingsBox, "Monitor", 14, 12, () => Theme.Dim, 9f);
-        monitorDropdown = Ui.Add(settingsBox, new Dropdown { AccessibleName = "Monitor" }, 14, 38, 218, 30);
+        monitorRow = rows.Row(lighting);
+        Rows.Row(lighting, monitorRow, "Monitor", "The screen the lights follow");
+        monitorDropdown = Rows.Dropdown(lighting, monitorRow, "Monitor");
         monitorDropdown.Picked += index =>
         {
             var all = Screen.AllScreens;
@@ -221,22 +265,15 @@ class ZonesPage : DevicePage
             ScreenChanged();
             Snap();
         };
-        Ui.Text(settingsBox, "Brightness", 14, 78, () => Theme.Dim, 9f);
-        screenBrightValue = Value(settingsBox, 14, 78, 218);
-        screenBright = Ui.Add(settingsBox, new Slider { AccessibleName = "Brightness" }, 14, 96, 218, 24);
-        screenBright.Changed += (s, e) =>
-        {
-            setup.Bright = Math.Max(1, screenBright.Value);
-            screenBrightValue.Text = setup.Bright + "%";
-            ScreenChanged();
-        };
-        Ui.Text(settingsBox, "Intensity", 14, 126, () => Theme.Dim, 9f);
-        boostValue = Value(settingsBox, 14, 126, 218);
-        boost = Ui.Add(settingsBox, new Slider { AccessibleName = "Intensity" }, 14, 144, 218, 24);
+        boostRow = rows.Row(lighting);
+        Rows.Row(lighting, boostRow, "Color boost", "Stronger screen colors on the lights");
+        boost = Rows.Slider(lighting, boostRow, "Color boost", out boostValue);
         boost.Changed += (s, e) => { setup.Boost = boost.Value; boostValue.Text = setup.Boost + "%"; ScreenChanged(); };
-        Ui.Text(settingsBox, "Update rate", 14, 174, () => Theme.Dim, 9f);
-        rateValue = Value(settingsBox, 14, 174, 218);
-        rate = Ui.Add(settingsBox, new Slider { AccessibleName = "Update rate", Max = 9, Step = 1 }, 14, 192, 218, 24);
+        rateRow = rows.Row(lighting);
+        Rows.Row(lighting, rateRow, "Update rate", "How often the lights follow the screen");
+        rate = Rows.Slider(lighting, rateRow, "Update rate", out rateValue);
+        rate.Max = 9;
+        rate.Step = 1;
         rate.Changed += (s, e) =>
         {
             setup.Interval = 1000 - rate.Value * 100;
@@ -244,9 +281,57 @@ class ZonesPage : DevicePage
             screenTimer.Interval = setup.Interval;
             ScreenChanged();
         };
-        smoothToggle = Option(settingsBox, "Smooth changes", 14, 228, 20, () => setup.Smooth = !setup.Smooth);
-        lockToggle = Option(settingsBox, "Pause when screen off or locked", 14, 256, 36,
-            () => setup.PauseWhenLocked = !setup.PauseWhenLocked);
+        smoothRow = rows.Row(lighting);
+        Rows.Row(lighting, smoothRow, "Smooth changes", "Colors fade instead of jumping");
+        smoothToggle = Rows.Toggle(lighting, smoothRow, "Smooth changes");
+        smoothToggle.Changed += () => { setup.Smooth = smoothToggle.Checked; ScreenChanged(); };
+
+        colorRow = rows.Row(lighting);
+        colorText = Rows.Row(lighting, colorRow, "Color", "The effect's color");
+        colors = new ColorRow(lighting, Rows.Width - Rows.Inset - ColorRow.Widest, colorRow + (Ui.RowHeight - ColorRow.Size) / 2, true);
+        colors.Picked += color => Edit(edited => edited.Color = color, true);
+        directionRow = rows.Row(lighting);
+        directionText = Rows.Row(lighting, directionRow, "Direction", "Which way the effect moves");
+        directions = Rows.Picker(lighting, directionRow, "Direction", ZoneLighting.DirText, PickerWidth);
+        directions.Picked += index =>
+        {
+            int direction = ZoneLighting.Directions[index];
+            Edit(edited => edited.Direction = direction, true);
+        };
+        // Shared with the Screen effect, which has its own level (setup.Bright), as on KeyboardPage.
+        int brightRow = rows.Row(lighting);
+        brightText = Rows.Row(lighting, brightRow, "Brightness", "");
+        bright = Rows.Slider(lighting, brightRow, "Brightness", out brightValue);
+        bright.Changed += (s, e) =>
+        {
+            int brightness = Math.Max(1, bright.Value);
+            if (!screening) { Edit(edited => edited.Bright = brightness, false); return; }
+            if (loading) return;
+            setup.Bright = brightness;
+            brightValue.Text = brightness + "%";
+            ScreenChanged();
+        };
+        bright.MouseUp += (s, e) => RefreshControls();
+        int speedRow = rows.Row(lighting);
+        speedText = Rows.Row(lighting, speedRow, "Speed", "How fast the effect moves");
+        speed = Rows.Slider(lighting, speedRow, "Speed", out speedValue);
+        speed.Changed += (s, e) =>
+        {
+            var effect = InfoOf(Displayed().Effect);
+            int period = SpeedScale.Period(speed.Value, effect.MinPeriod, effect.MaxPeriod);
+            Edit(edited => edited.Period = period, false);
+        };
+        speed.MouseUp += (s, e) => RefreshControls();
+        pauseRow = rows.Row(lighting);
+        pauseText = Rows.Row(lighting, pauseRow, "Pause when screen off or locked", "For the Screen effect");
+        lockToggle = Rows.Toggle(lighting, pauseRow, "Pause when screen off or locked");
+        lockToggle.Changed += () => { setup.PauseWhenLocked = lockToggle.Checked; ScreenChanged(); };
+
+        var saving = rows.Section("Saving", out heading);
+        string noteText = "G-Lite can't save to " + (keyboard ? "this keyboard" : "these speakers")
+            + " yet. It keeps your lighting and sets it again when G-Lite starts and when you open this screen.";
+        int noteRow = rows.Row(saving, Rows.NoteHeight(noteText) + 2 * NotePadding);
+        Rows.Note(saving, noteRow + NotePadding, noteText);
 
         gameMode = keyboard && picture != null && !zonesModel && found.Has(0x4522);
         if (gameMode)
@@ -255,17 +340,26 @@ class ZonesPage : DevicePage
             viewPick = Ui.Add(this, new SegmentedPicker { Items = new[] { "Settings", "Game" }, AccessibleName = "View" }, 440, 72, 196, 32);
             viewPick.Picked += index => { gameShown = index == 1; RefreshControls(); };
             // Tried on the G413 (2026-11-22); the G512 and G513 aren't.
-            string gameText = "Select the keys you want to disable while gaming (Fn+F8 turns Game mode on). Changes apply "
-                + "immediately and can be saved in your G-Lite presets, but not in the keyboard's memory.";
+            string gameText = "Select the keys you want to disable while gaming (Fn+F8 turns Game mode on). Windows and Menu keys are "
+                + "always disabled in Game mode. Changes apply immediately and can be saved in your G-Lite presets, but not in the "
+                + "keyboard's memory.";
             if (!found.ShortName.ToUpper().StartsWith("G413")) gameText = "Experimental, not tried on this keyboard yet. " + gameText;
-            gameBox = Ui.Add(this, new GameModeBox(KeyLayout.Load(model), gameText, false), 20, 118, 616, 543);
-            gameBox.Picked += usage =>
+            gamePicture = Ui.Add(this, GameModeKeys.Picture(KeyLayout.Load(model), false), 20, BodyTop, Rows.Width, PictureHeight);
+            gamePicture.Visible = false;
+            gamePicture.IdPicked += id =>
             {
                 var keys = gameKeys.ToList();
+                int usage = GameModeKeys.Usage(id);
                 if (!keys.Remove(usage)) keys.Add(usage);
                 SetGameKeys(keys);
             };
-            gameBox.Cleared += () => SetGameKeys(new int[0]);
+            int gameTop = 0, noteHeight = Rows.NoteHeight(gameText) + 2 * NotePadding;
+            gameBox = Rows.Section(sheet, "Game mode", ref gameTop, new RoundedBox(), noteHeight + Ui.RowHeight, out gameHeading);
+            gameHeight = gameTop;
+            Rows.Note(gameBox, NotePadding, gameText);
+            gameKeysCount = Rows.Row(gameBox, noteHeight, "Keys turned off", "").Hint;
+            gameClear = Rows.Button(gameBox, noteHeight, "Clear", "Clear the Game mode keys");
+            gameClear.Click += (s, e) => SetGameKeys(new int[0]);
         }
         audioTimer.Tick += (s, e) => AudioTick();
         liveTimer.Tick += (s, e) => LiveTick();
@@ -283,6 +377,16 @@ class ZonesPage : DevicePage
                 picked = at + 1;
                 RefreshControls();
             };
+        }
+        if (speakers != null)
+            speakers.Picked += zone =>
+            {
+                if (!zonePicker.Enabled) return;
+                picked = segZones.IndexOf(zone) + 1;
+                RefreshControls();
+            };
+        if (picture != null || speakers != null)
+        {
             frameTimer.Tick += (s, e) => ShowFrame();
             frameTimer.Start();
         }
@@ -310,16 +414,8 @@ class ZonesPage : DevicePage
         base.Dispose(disposing);
     }
 
-    Toggle Option(Control parent, string text, int x, int y, int tall, Action flip)
-    {
-        var toggle = Ui.Add(parent, new Toggle { AccessibleName = text }, x, y + 2, 34, 18);
-        toggle.Changed += () => { flip(); ScreenChanged(); };
-        var label = Ui.Text(parent, text, x + 42, y, () => Theme.Text, 9f);
-        label.AutoSize = false;
-        label.Size = new Size(176, tall);
-        toggle.Follow(label);
-        return toggle;
-    }
+    // The speakers' zone names need a wider picker than the keyboards' Keys and Logo, or Zone 1 to 5.
+    int ZonePickerWidth(int items) { return !keyboard ? 440 : items <= 3 ? Rows.ControlWidth : PickerWidth; }
 
     int Zone { get { return picked == 0 || picked > segZones.Count ? 0 : segZones[picked - 1]; } }
 
@@ -551,22 +647,28 @@ class ZonesPage : DevicePage
         LogUserAction(text == "" ? "Game mode keys cleared" : "Game mode keys " + string.Join(" ", list.Select(usage => usage.ToString("X2"))));
         RunOnDevice(hidpp => GameModeKeys.Send(hidpp, list, false));
         Edited();
-        gameBox.ShowKeys(gameKeys);
+        ShowGameKeys();
     }
 
+    void ShowGameKeys()
+    {
+        gamePicture.PickedIds = new HashSet<int>(gameKeys.Select(GameModeKeys.LightingId));
+        gamePicture.Invalidate();
+        gameKeysCount.Text = gameKeys.Count == 0 ? "Only Windows and Menu"
+            : gameKeys.Count + (gameKeys.Count == 1 ? " key" : " keys") + ", besides Windows and Menu";
+        gameClear.Enabled = gameKeys.Count > 0;
+    }
+
+    // On a lighting-id picture every key shows the zone at the keys (0x8070 location 1, else zone 0) but the logo, which has no id: it
+    // shows the zone at the logo (location 2, the G512's second zone) once the keyboard is read.
     List<int> KeyZones()
     {
-        return Enumerable.Range(0, picture.Count).Select(key => zonesModel ? picture.IdOf(key) : picture.IdOf(key) >= 0 ? 0 : -1).ToList();
-    }
-
-    void HideZoneRow()
-    {
-        zoneRowHidden = true;
-        zoneHead.Visible = zonePicker.Visible = false;
-        int shift = effectHead.Top - zoneHead.Top;
-        foreach (Control control in light.Controls)
-            if (control.Top > zoneHead.Top && control != zonePicker) control.Top -= shift;
-        RefreshControls();
+        var listed = zones;
+        int logo = listed == null ? -1 : listed.FindIndex(zone => zone[ZoneLighting.Place] == 2),
+            keys = listed == null ? 0 : Math.Max(0, listed.FindIndex(zone => zone[ZoneLighting.Place] == 1));
+        return Enumerable.Range(0, picture.Count)
+            .Select(key => zonesModel ? picture.IdOf(key) : picture.IdOf(key) >= 0 ? keys : picture.NameOf(key) == "Logo" ? logo : -1)
+            .ToList();
     }
 
     // The loudest of eight bands, 30% to 90% of AudioLoopback's range spread over the whole level.
@@ -640,9 +742,11 @@ class ZonesPage : DevicePage
         if (audioProblem != null) ShowAudioProblem(null);
     }
 
+    // Screen covers every zone, so it's on All.
     void ScreenOn()
     {
         screening = true;
+        picked = 0;
         Settings.Set(Active, "1");
         Settings.Set(Saved, setup.ToText());
         shown = null;
@@ -765,73 +869,77 @@ class ZonesPage : DevicePage
         bool known = displayed != null && !screening;
         var effect = known ? InfoOf(displayed.Effect) : null;
         bool mixed = picked == 0 && current != null && current.Any(zoneLight => zoneLight == null || !zoneLight.Same(current[0]));
-        lightHead.Text = listed != null && listed.Count == 0
-            ? "Lighting (not found on " + (keyboard ? "this keyboard" : "these speakers") + ")"
-            : screening ? "Lighting"
-            : !known ? "Lighting (as on the " + noun + ")"
-            : mixed ? "Lighting (zones differ, a change sets all of them)"
-            : "Lighting";
+
+        // Which rows there are first: a row shown again makes its controls visible, and the refresh below hides those it keeps hidden.
+        rows.ShowRow(lighting, zoneRow, listed == null || segZones.Count > 1);
+        foreach (int row in new[] { screenRow, monitorRow, boostRow, rateRow, smoothRow }) rows.ShowRow(lighting, row, !keyboard && screening);
+        rows.ShowRow(lighting, pauseRow, !keyboard);
+        rows.ShowRow(lighting, colorRow, !monochrome);
+        rows.ShowRow(lighting, directionRow, listed == null
+            || ZoneLighting.Effects.Any(info => info.Direction && listed.Any(zone => zone.ContainsKey(info.Id))));
+        PlaceView();
+
         zonePicker.Enabled = ready && !screening;
-        SetDimmed(zoneHead, !screening);
+        zoneText.Enable(ready && !screening);
+        zoneText.Hint.Text = mixed && !screening ? "Zones differ" : picture != null ? "Click a key to pick its zone"
+            : speakers != null ? "Click a light to pick it" : "The lights to set";
         zonePicker.Index = picked;
         zonePicker.Invalidate();
-        effects.Enabled = ready || screening;
-        effects.Index = screening ? ZoneLighting.Effects.Length
-            : known ? Array.FindIndex(ZoneLighting.Effects, info => info.Id == displayed.Effect)
-            : -1;
+        // Audio is sent as Static, so it's listed where Static is; Screen and the live effects cover every zone, so only on All.
         var offered = !ready ? null : picked == 0 ? listed : listed.Skip(Zone).Take(1);
-        effects.Off = offered == null ? new int[0]
-            : Enumerable.Range(0, ZoneLighting.Effects.Length)
-                .Where(i => !offered.Any(zone => zone.ContainsKey(ZoneLighting.Effects[i].Id)))
-                .ToArray();
+        shownEffects.Clear();
+        shownEffects.AddRange(offered == null ? effectIds
+            : effectIds.Where(id => Live(id) || id == ScreenEffect ? picked == 0
+                : offered.Any(zone => zone.ContainsKey(id == ZoneLighting.Audio.Id ? 0x01 : id))));
+        effects.Items.Clear();
+        effects.Items.AddRange(shownEffects.Select(id => id == ScreenEffect ? "Screen" : InfoOf(id).Name));
+        // Screen can be turned off before the speakers answer.
+        effects.Enabled = ready || screening;
+        effects.Index = screening ? shownEffects.IndexOf(ScreenEffect) : known ? shownEffects.IndexOf(displayed.Effect) : -1;
         effects.Invalidate();
-        if (effectList != null)
-        {
-            // Audio is sent as Static, so it's listed where Static is; the live effects cover the whole keyboard, so only on All.
-            shownEffects.Clear();
-            shownEffects.AddRange(offered == null ? effectIds
-                : effectIds.Where(id => Live(id) ? picked == 0
-                    : offered.Any(zone => zone.ContainsKey(id == ZoneLighting.Audio.Id ? 0x01 : id))));
-            effectList.Items.Clear();
-            effectList.Items.AddRange(shownEffects.Select(id => InfoOf(id).Name));
-            effectList.Enabled = ready;
-            effectList.Index = known ? shownEffects.IndexOf(displayed.Effect) : -1;
-            effectList.Invalidate();
-        }
-        bool color = known && effect.Color && !monochrome, hasSpeed = known && effect.Speed, hasBrightness = known && displayed.Effect != 0;
-        SetDimmed(brightHead, hasBrightness);
+        effectText.Enable(ready);
+        effectText.Hint.Text = screening ? "The lights follow the screen"
+            : known && IsLive(displayed) ? "Drawn by G-Lite, key by key"
+            : known && displayed.Effect == ZoneLighting.Audio.Id ? "Follows the PC's sound"
+            : known || !ready ? "What the lighting does"
+            : keyboard ? "The keyboard's own lighting, until you pick one"
+            : "The speakers' own lighting, until you pick one";
+
+        bool color = known && effect.Color && !monochrome, hasSpeed = known && effect.Speed,
+            hasBrightness = screening || known && displayed.Effect != 0;
+        colorText.Enable(color);
+        // Not on a one-colour keyboard, whose colour row is left out: it would show its custom swatch again.
+        if (!monochrome) colors.RefreshControls(known ? displayed.Color : 0xFFFFFF, color);
+        bool wave = known && effect.Direction && !IsLive(displayed);
+        directionText.Enable(wave);
+        directions.Enabled = wave;
+        directions.Index = wave ? Array.IndexOf(ZoneLighting.Directions, displayed.Direction) : -1;
+        directions.Invalidate();
+        int level = screening ? setup.Bright : known ? displayed.Bright : 100;
+        brightText.Enable(hasBrightness);
+        // G HUB gives a one-colour keyboard a slider from black to white; G-Lite sends white, scaled by Brightness, which is the same.
+        brightText.Hint.Text = monochrome ? "One color: within the keyboard's own level (F7)"
+            : screening ? "How bright the screen's colors are" : "How bright the lights are";
         bright.Enabled = hasBrightness;
         // Not while they're dragged (the refresh at each send runs then): Brightness at 0 is kept as 1. MouseUp refreshes them.
-        if (!bright.Capture) bright.Value = known ? displayed.Bright : 100;
-        brightValue.Text = hasBrightness ? displayed.Bright + "%" : "";
+        if (!bright.Capture) bright.Value = level;
+        brightValue.Text = hasBrightness ? level + "%" : "";
         bright.Invalidate();
-        SetDimmed(speedHead, hasSpeed);
+        speedText.Enable(hasSpeed);
         speed.Enabled = hasSpeed;
         if (hasSpeed && !speed.Capture) speed.Value = SpeedScale.Percent(displayed.Period, effect.MinPeriod, effect.MaxPeriod);
         speedValue.Text = hasSpeed ? speed.Value + "%" : "";
         speed.Invalidate();
-        foreach (var control in plainLight) control.Visible = !screening;
-        if (!screening) colors.RefreshControls(known ? displayed.Color : 0xFFFFFF, color);
-        bool wave = known && effect.Direction && !IsLive(displayed);
-        // G HUB gives a one-colour keyboard a slider from black to white; G-Lite sends white, scaled by Brightness, which is the same.
-        colorHead.Text = wave ? "Direction" : monochrome ? "Color: one only; Brightness works within the keyboard's own level (F7)" : "Color";
-        SetDimmed(colorHead, color || wave);
-        if (wave || monochrome) foreach (var control in light.Controls.OfType<Swatch>()) control.Visible = false;
-        directions.Visible = !screening && wave;
-        directions.Index = wave ? Array.IndexOf(ZoneLighting.Directions, displayed.Direction) : -1;
-        directions.Invalidate();
-        if (picture != null) ShowFrame();
-        areas.Visible = settingsBox.Visible = screening && !gameShown;
-        light.Visible = !gameShown;
-        if (pictureBox != null) pictureBox.Visible = !gameShown;
-        if (gameBox != null)
+        pauseText.Enable(screening);
+        lockToggle.Enabled = screening;
+        lockToggle.Checked = setup.PauseWhenLocked;
+        if (picture != null || speakers != null) ShowFrame();
+        if (gameMode)
         {
-            gameBox.Visible = gameShown;
-            gameBox.ShowKeys(gameKeys);
+            ShowGameKeys();
             viewPick.Index = gameShown ? 1 : 0;
             viewPick.Invalidate();
         }
-        light.Height = light.Width * ((screening ? 162 : picture != null ? 310 : 330) - (zoneRowHidden ? ZoneRowHeight : 0)) / 616;
         SyncAudio();
         SyncLive();
         var all = Screen.AllScreens;
@@ -843,18 +951,23 @@ class ZonesPage : DevicePage
         preview.Selected = selectedZone;
         preview.Monitor = chosen.Bounds.Size;
         preview.Invalidate();
-        screenBright.Value = setup.Bright;
-        screenBrightValue.Text = setup.Bright + "%";
-        screenBright.Invalidate();
         boost.Value = setup.Boost;
         boostValue.Text = setup.Boost + "%";
         rate.Value = (1000 - setup.Interval) / 100;
         rateValue.Text = setup.Interval + " ms";
         smoothToggle.Checked = setup.Smooth;
-        lockToggle.Checked = setup.PauseWhenLocked;
         boost.Invalidate();
         rate.Invalidate();
         loading = false;
+    }
+
+    // Settings' sections with the rows this device has, or the Game view's.
+    void PlaceView()
+    {
+        if (gameMode) gameHeading.Visible = gameBox.Visible = gamePicture.Visible = gameShown;
+        if (picture != null) picture.Visible = !gameShown;
+        int height = rows.Place(Scaled, !gameShown);
+        FitBody(gameShown ? gameHeight : height);
     }
 
     MouseLight LightOfZone(int zone)
@@ -873,9 +986,36 @@ class ZonesPage : DevicePage
         if (speed.Enabled) speedValue.Text = speed.Value + "%";
     }
 
+    // A light's colour as the pictures draw it: at its brightness over an unlit key.
+    static Color Shown(Color color)
+    {
+        int max = Math.Max(color.R, Math.Max(color.G, color.B));
+        return max == 0 ? Theme.KeyOff
+            : Ui.Mix(Theme.KeyOff, Color.FromArgb(color.R * 255 / max, color.G * 255 / max, color.B * 255 / max), max / 255.0);
+    }
+
+    // The speakers' four lights: what each zone runs, or the screen's colours while the Screen effect does.
+    void ShowSpeakers()
+    {
+        var listed = zones;
+        var sampled = framed;
+        double seconds = clock.Elapsed.TotalSeconds;
+        var lit = new Color[4];
+        for (int zone = 0; zone < 4; zone++)
+        {
+            int frame = screening && sampled != null && zone < sampled.Length ? sampled[zone] : -1;
+            lit[zone] = frame >= 0 ? Shown(Color.FromArgb(frame >> 16 & 0xFF, frame >> 8 & 0xFF, frame & 0xFF))
+                : current != null && listed != null && !screening ? Shown(ZoneLighting.ColorAt(LightOfZone(zone), 0.5f, seconds))
+                : Theme.KeyOff;
+        }
+        speakers.Display(lit, picked > 0 && zonePicker.Enabled ? Zone : -1, zonePicker.Enabled);
+    }
+
     void ShowFrame()
     {
-        if (picture == null || !Visible) return;
+        if (!Visible) return;
+        if (speakers != null) { ShowSpeakers(); return; }
+        if (picture == null) return;
         var listed = zones;
         if (!isoShown && iso != null && listed != null && KeyLayout.IsIso(layout))
         {
@@ -883,7 +1023,7 @@ class ZonesPage : DevicePage
             picture.SetModel(iso);
             keyZones = KeyZones();
             keyField = null;
-            if (gameBox != null) gameBox.SetModel(iso);
+            if (gamePicture != null) gamePicture.SetModel(iso);
         }
         // A live effect draws the picture itself (ShowLiveFrame).
         if (current != null && IsLive(current[0]) && !screening) return;
@@ -1005,6 +1145,7 @@ class ZonesPage : DevicePage
         {
             zones = read;
             framed = null;
+            if (picture != null) keyZones = KeyZones();
             if (keyboard)
             {
                 var listed = read.Take(Count).ToList();
@@ -1014,8 +1155,10 @@ class ZonesPage : DevicePage
                 zonePicker.Items = new[] { "All" }
                     .Concat(segZones.Select(i => ZoneLighting.ZoneName(listed[i][ZoneLighting.Place], i)))
                     .ToArray();
+                int width = ZonePickerWidth(zonePicker.Items.Length);
+                zonePicker.Width = Scaled(width);
+                zonePicker.Left = Scaled(Rows.Width - Rows.Inset - width);
                 if (picked > segZones.Count) picked = 0;
-                if (segZones.Count <= 1 && !zoneRowHidden) HideZoneRow();
             }
             RefreshControls();
             Loaded();

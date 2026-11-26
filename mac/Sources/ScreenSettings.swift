@@ -40,7 +40,13 @@ struct ScreenSettings: Equatable {
     mutating func add() -> Int? {
         guard zones.count < ScreenSettings.maxZones,
               let mark = ScreenSettings.markColors.first(where: { color in !zones.contains { $0.markColor == color } }) else { return nil }
-        zones.append(Zone(name: "Zone \(zones.count + 1)", markColor: mark, area: CGRect(x: 0.375, y: 0.3, width: 0.25, height: 0.3)))
+        let right = zones.last?.area ?? CGRect(x: 0, y: 0.5, width: 1, height: 0.35)
+        zones.append(Zone(name: "Zone \(zones.count + 1)", markColor: mark, area: right))
+        // The zones become equal strips left to right, the new one at the right, each keeping its height.
+        for i in zones.indices {
+            let area = zones[i].area
+            zones[i].area = CGRect(x: CGFloat(i) / CGFloat(zones.count), y: area.minY, width: 1 / CGFloat(zones.count), height: area.height)
+        }
         return zones.count - 1
     }
 

@@ -2,8 +2,18 @@ import AppKit
 
 // The G510 screen (app/G510Page.cs): Off, Static, Breathe and Cycle, a colour, brightness and speed. Live only, kept as
 // lighting.<device> and set again on load; Breathe and Cycle are G-Lite's frames every 50 ms, so they stop when G-Lite quits.
+// M1 to M3 (the footer) each have their own lighting and G key bindings, as in LGS; the Bindings view sets G1 to G18 (kept, not acted
+// on yet) and the Game view shows the Game mode switch.
 final class G510Page: DevicePage {
-    private var current: G510Settings?, read: G510Settings?, sent: G510Settings?
+    // Each M key's lighting, nil until one is picked (the keyboard's colour as read is shown then).
+    private var lights = [G510Settings?](repeating: nil, count: G510Keys.banks)
+    private var bank = 0
+    private var current: G510Settings? {
+        get { lights[bank] }
+        set { lights[bank] = newValue }
+    }
+    private var read: G510Settings?, sent: G510Settings?
+    private var answered = false
     private var ready = false, refreshing = false, framing = false, sequence = 0
     private var framed = -1
     private var pausedUntil = Date.distantPast
@@ -16,13 +26,24 @@ final class G510Page: DevicePage {
     private let colorHead = Ui.secondary("Colour")
     private var brightHead = NSTextField(), speedHead = NSTextField()
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
+    private let picture = KeyLayout.load("g510.json").map { KeyPicture($0) }
+    private var pictureArea = NSView(), lightingBox = NSView(), note = NSView(), keysBox = NSView(), gameBox = NSView()
+    private let views = ["Settings", "Bindings", "Game"]
+    private lazy var viewPick = NSSegmentedControl(labels: views, trackingMode: .selectOne, target: self, action: #selector(viewPicked))
+    private var openView = 0
+    private let bankPicker = NSSegmentedControl(labels: ["M1", "M2", "M3"], trackingMode: .selectOne, target: nil, action: nil)
+    private lazy var gKeys = (0..<G510Keys.banks).map { G510Keys.fromText(Settings.get(gKeysSetting($0))) }
+    private let buttonRows = ButtonRows(actions: Bindings.keyboardActions)
+    private let gameState = Ui.label("")
 
-    private var rememberedKey: String { "lighting." + device.settingsKey }
+    // M1's is where the one lighting was kept before the M keys had their own.
+    private func remembered(_ set: Int) -> String { "lighting." + device.settingsKey + (set == 0 ? "" : ".m\(set + 1)") }
+    private func gKeysSetting(_ set: Int) -> String { "gkeys." + device.settingsKey + ".m\(set + 1)" }
 
     deinit { animation?.invalidate() }
 
     override func loadView() {
-        current = G510Settings.fromText(Settings.get(rememberedKey))
+        lights = (0..<G510Keys.banks).map { G510Settings.fromText(Settings.get(remembered($0))) }
         for control in [effects, color, bright, speed] as [NSControl] { control.target = self; control.action = #selector(changed) }
         revert.target = self; revert.action = #selector(revertClicked)
         color.widthAnchor.constraint(equalToConstant: 60).isActive = true
@@ -34,9 +55,24 @@ final class G510Page: DevicePage {
         sliders.alignment = .top
         sliders.spacing = 24
         let backlight = Ui.column([Ui.column([Ui.secondary("Effect"), effects], spacing: 4), Ui.column([colorHead, color], spacing: 4), sliders])
-        let note = Ui.hint("One colour for the whole keyboard. G-Lite sets it again when it starts, and runs Breathe and Cycle itself: they "
-                           + "stop when you quit G-Lite.")
-        view = Ui.page(header: header, body: [Ui.box("Backlight", backlight), note], status: status, buttons: [revert])
+        note = Ui.hint("One colour for the whole keyboard. G-Lite sets it again when it starts, and runs Breathe and Cycle itself: they "
+                       + "stop when you quit G-Lite.")
+        lightingBox = Ui.box("Backlight", backlight)
+        pictureArea = picture.map { pictureBox($0) } ?? NSView()
+        bankPicker.target = self; bankPicker.action = #selector(bankPicked)
+        bankPicker.setAccessibilityLabel("M key")
+        buttonRows.assigned = { [weak self] row, binding in
+            guard let self = self else { return }
+            self.gKeys[self.bank][row] = binding
+            Settings.set(self.gKeysSetting(self.bank), G510Keys.toText(self.gKeys[self.bank]))
+            self.logAction("\(G510Keys.names[row]) in M\(self.bank + 1): " + Bindings.describe(binding))
+            self.refresh()
+        }
+        keysBox = Ui.box("G keys", buttonRows)
+        gameBox = Ui.box("Game mode", Ui.column([
+            Ui.hint("While its Game mode switch is on, the keyboard turns off its Windows keys itself. There are no other keys to pick."),
+            NSStackView(views: [Ui.label("Game mode switch:"), gameState])]))
+        view = Ui.page(header: header, body: [pictureArea, lightingBox, note, keysBox, gameBox], status: status, buttons: [bankPicker, revert])
         header.show(device)
         refresh()
         load()
@@ -67,12 +103,49 @@ final class G510Page: DevicePage {
         } else { debounce?.invalidate(); debounce = nil; send() }
     }
 
-    // Back to the colour the keyboard had when G-Lite read it, and nothing remembered.
-    override func presetText() -> String? { current?.toText() ?? "" }
+    override var headerAccessory: NSView? { viewPick }
 
+    @objc private func viewPicked() {
+        openView = max(0, viewPick.selectedSegment)
+        buttonRows.stopRecording()
+        refresh()
+        guard openView == 2 else { return }
+        var state = "Unknown"
+        run({ hidpp in
+            do { state = try G510Keys.gameMode(hidpp) ? "On" : "Off" } catch GLiteError.io {}
+        }, done: { self.gameState.stringValue = state })
+    }
+
+    // For --snapshot.
+    func showView(_ index: Int) { viewPick.selectedSegment = index; viewPicked() }
+
+    // The M key's own lighting, sent with its light lit (feature 0x04, as LGS did); the G keys follow in the Bindings view.
+    @objc private func bankPicked() {
+        let index = bankPicker.selectedSegment
+        if index < 0 || index == bank { return }
+        bank = index
+        buttonRows.stopRecording()
+        logAction("M\(bank + 1)")
+        refresh()
+        if !ready { return }
+        run({ try G510Keys.lightBank($0, index) })
+        send()
+    }
+
+    // Every M key's lighting, so picking another M key doesn't change the preset.
+    override func presetText() -> String? {
+        lights.allSatisfy { $0 == nil } ? "" : lights.map { $0?.toText() ?? "" }.joined(separator: "|")
+    }
+
+    // A preset from before the M keys had their own lighting holds one: M1's, where it was kept. An empty one has none.
     override func applyPreset(_ text: String) {
-        guard let settings = G510Settings.fromText(text) else { return }
-        current = settings
+        let pieces = text.components(separatedBy: "|")
+        if pieces.count == 1 && !text.isEmpty {
+            guard let settings = G510Settings.fromText(text) else { return }
+            lights[0] = settings
+        } else {
+            lights = (0..<G510Keys.banks).map { $0 < pieces.count ? G510Settings.fromText(pieces[$0]) : nil }
+        }
         sequence += 1
         refresh()
         send()
@@ -87,16 +160,22 @@ final class G510Page: DevicePage {
 
     private func backToRead() {
         guard let read = read else { return }
-        Settings.remove(rememberedKey)
         current = nil
+        keepLights()
         refresh()
         send(read)
     }
 
+    private func keepLights() {
+        for (set, light) in lights.enumerated() {
+            if let light = light { Settings.set(remembered(set), light.toText()) } else { Settings.remove(remembered(set)) }
+        }
+    }
+
+    // An M key without its own lighting goes back to the colour read.
     private func send() {
-        guard let current = current else { return }
-        Settings.set(rememberedKey, current.toText())
-        send(current)
+        keepLights()
+        if let want = current ?? read { send(want) }
     }
 
     // Breathe and Cycle are sent by animate, frame by frame.
@@ -106,8 +185,7 @@ final class G510Page: DevicePage {
         framed = -1
         pausedUntil = .distantPast
         if want.on && want.effect != G510Settings.staticEffect {
-            sent = nil
-            showStatus()
+            run({ _ in self.sent = nil }, done: { if startedAt == self.sequence { self.showStatus() } })
             return
         }
         run({ hidpp in
@@ -117,7 +195,16 @@ final class G510Page: DevicePage {
         }, done: { if startedAt == self.sequence { self.showStatus() } })
     }
 
+    // Every backlit key in the colour the keyboard shows, Breathe and Cycle frame by frame.
+    private func showFrame() {
+        guard let picture = picture else { return }
+        let settings = current ?? read
+        let frame = ready && settings != nil ? G510Lighting.frame(settings!, Date().timeIntervalSince(clock) * 1000) : 0
+        picture.show((0..<picture.count).map { picture.idOf($0) >= 0 ? frame : 0 })
+    }
+
     private func animate() {
+        showFrame()
         guard let current = current, current.on, current.effect != G510Settings.staticEffect, !framing, Date() >= pausedUntil else { return }
         let frame = G510Lighting.frame(current, Date().timeIntervalSince(clock) * 1000)
         if frame == framed { return }
@@ -138,18 +225,25 @@ final class G510Page: DevicePage {
 
     private func load() {
         status.show("Reading the keyboard…")
-        let want = current
-        var color = -1
+        let wanted = lights
+        var color = -1, lit = bank
         run({ hidpp in
             self.sent = nil
+            // Starts on the M key the keyboard has lit.
+            lit = (try? G510Keys.litBank(hidpp, lit)) ?? lit
             color = (try? G510Lighting.read(hidpp)) ?? -1
-            if let want = want, color >= 0, !want.on || want.effect == G510Settings.staticEffect {
+            if let want = wanted[lit], color >= 0, !want.on || want.effect == G510Settings.staticEffect {
                 try G510Lighting.set(hidpp, G510Lighting.frame(want, 0))
                 self.sent = want
             }
         }, done: {
             self.ready = true
-            self.read = color < 0 ? nil : G510Settings(on: color != 0, color: color == 0 ? 0xFFFFFF : color, bright: 100)
+            self.bank = lit
+            self.answered = color >= 0
+            // Only the first: later loads read what G-Lite set, which would pass one M key's colour to another.
+            if self.read == nil && self.answered {
+                self.read = G510Settings(on: color != 0, color: color == 0 ? 0xFFFFFF : color, bright: 100)
+            }
             self.refresh()
             self.showStatus()
             self.loaded()
@@ -157,7 +251,7 @@ final class G510Page: DevicePage {
     }
 
     private func showStatus() {
-        if ready && read == nil { status.show("The keyboard didn't answer. Is it plugged in?", error: true); return }
+        if ready && !answered { status.show("The keyboard didn't answer. Is it plugged in?", error: true); return }
         status.show(current == nil ? "" : "Set by G-Lite, not saved to the keyboard")
     }
 
@@ -182,6 +276,15 @@ final class G510Page: DevicePage {
             / Double(G510Settings.maxPeriod - G510Settings.minPeriod)).rounded() : 0
         speedValue.stringValue = moving ? "\(speed.integerValue)%" : ""
         revert.isEnabled = ready && current != nil && read != nil
+        let settingsView = openView == 0
+        for part in [pictureArea, lightingBox, note] { part.isHidden = !settingsView }
+        pictureArea.isHidden = openView == 1
+        keysBox.isHidden = openView != 1
+        gameBox.isHidden = openView != 2
+        viewPick.selectedSegment = openView
+        bankPicker.selectedSegment = bank
+        buttonRows.show(names: G510Keys.names, bindings: gKeys[bank], editable: true, note: "Not working yet: G-Lite doesn't read the G keys yet")
+        showFrame()
         let animated = ready && current?.on == true && current?.effect != G510Settings.staticEffect
         if animated && animation == nil {
             animation = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.animate() }

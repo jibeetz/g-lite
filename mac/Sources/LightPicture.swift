@@ -11,7 +11,7 @@ final class LightPicture: NSView {
 
     init() {
         super.init(frame: .zero)
-        heightAnchor.constraint(equalToConstant: 58).isActive = true
+        heightAnchor.constraint(equalToConstant: 70).isActive = true
         widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
         setAccessibilityRole(.image)
         setAccessibilityLabel("Light")
@@ -29,7 +29,8 @@ final class LightPicture: NSView {
 
     private var bar: CGRect {
         let width = bounds.width * 0.64, height = width / 12
-        return CGRect(x: (bounds.width - width) / 2, y: bounds.height - height - 4, width: width, height: height)
+        // Centred, so the glow around it and the picked zone's mark under the bar stay inside the picture.
+        return CGRect(x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width: width, height: height)
     }
 
     static func warmth(_ kelvin: Int) -> NSColor {
@@ -43,8 +44,10 @@ final class LightPicture: NSView {
         if back && backOn, let zones = colors, let context = NSGraphicsContext.current?.cgContext {
             let zoneWidth = housing.width / CGFloat(zones.count)
             for (zone, color) in zones.enumerated() where color >= 0 {
-                let glow = CGRect(x: housing.minX + CGFloat(zone) * zoneWidth - zoneWidth * 0.35, y: 0, width: zoneWidth * 1.7,
-                                  height: housing.minY * 2 + bar.height * 0.4)
+                // Around the housing, no further than the picture's edges.
+                let middle = housing.midY, reach = min(middle, bounds.height - middle)
+                let glow = CGRect(x: housing.minX + CGFloat(zone) * zoneWidth - zoneWidth * 0.2, y: middle - reach, width: zoneWidth * 1.4,
+                                  height: 2 * reach)
                 let tint = NSColor(rgb: color)
                 let colorsArray = [tint.withAlphaComponent(CGFloat(max(0.35, level))).cgColor, tint.withAlphaComponent(0).cgColor] as CFArray
                 guard let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colorsArray, locations: [0, 1]) else { continue }
@@ -67,7 +70,7 @@ final class LightPicture: NSView {
         if back && selected > 0, let zones = colors {
             let zoneWidth = bar.width / CGFloat(zones.count)
             NSColor.controlAccentColor.setStroke()
-            let mark = NSBezierPath(roundedRect: CGRect(x: bar.minX + CGFloat(selected - 1) * zoneWidth + 2, y: bar.maxY + 2, width: zoneWidth - 4, height: 2),
+            let mark = NSBezierPath(roundedRect: CGRect(x: bar.minX + CGFloat(selected - 1) * zoneWidth + 2, y: bar.maxY + 5, width: zoneWidth - 4, height: 2),
                                     xRadius: 1, yRadius: 1)
             mark.lineWidth = 2
             mark.stroke()

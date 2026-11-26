@@ -192,6 +192,19 @@ enum SelfTest {
             check(try G510Lighting.read(keyboard) == 0xFFFFFF, "the G510s's backlight reads as its owner's report says")
             try G510Lighting.set(keyboard, 0x7F1010)
             check(keyboard.features[0x05]! == [0x05, 0x7F, 0x10, 0x10] && keyboard.writes == 1, "the backlight is set as 05 R G B")
+            let g510Keys = G510Keys.fromText("80020105 800300E9 nonsense")
+            let switched = FakeG510()
+            switched.gameMode = true
+            let litBefore = try G510Keys.litBank(switched, 2)
+            let switchOn = try G510Keys.gameMode(switched), switchOff = try G510Keys.gameMode(FakeG510())
+            try G510Keys.lightBank(switched, 2)
+            let litAfter = try G510Keys.litBank(switched, 0)
+            check(g510Keys.count == 18 && G510Keys.toText(g510Keys).hasPrefix("80020105 800300E9 80000000 ")
+                  && G510Keys.fromText(G510Keys.toText(g510Keys)) == g510Keys
+                  && switchOn && !switchOff && litBefore == 0 && switched.features[0x04]![1] == 0x20 && litAfter == 2
+                  && KeyLayout.load("g510.json")!.keyIds().filter { $0 >= 0 }.count == 18 + 104,
+                  "the G510's G key bindings read back from their text, unbound keys as Disabled; its Game mode switch is bit 2 of byte 3 of "
+                  + "input report 03; M1 to M3 light as 80, 40 and 20 in feature 04; its picture lights the 18 G keys and the 104 others")
         } catch {
             check(false, "fake G510: \(error)")
         }
@@ -203,6 +216,12 @@ enum SelfTest {
             try HeadsetProtocol.setSidetone(headset, 55)
             try HeadsetProtocol.setOff(headset, 10)
             check(headset.sidetone == 55 && headset.autoOffMinutes == 10, "headset sidetone and auto-off are set")
+            try HeadsetProtocol.setEqualizer(headset, [-12, 0, 0, 0, 0, 0, 0, 0, 0, 12], keep: true)
+            check(state.frequencies == FakeHeadset.frequencies && state.range == 12 && state.set.bands == [0, 0, 0, 0, 0, 1, 3, 5, 6, 6]
+                  && headset.persistence == 1 && headset.bands.first == -12 && headset.bands.last == 12
+                  && HeadsetSettings.fromText("30,10,1 -2 3") == HeadsetSettings(sidetone: 30, autoOffMinutes: 10, bands: [1, -2, 3])
+                  && HeadsetSettings.fromText("30,10")?.bands == nil && state.set.text == "30,30,0 0 0 0 0 1 3 5 6 6",
+                  "the equalizer's bands, frequencies and range are read (0x8310), written signed with persistence 1, and kept in presets")
             let noOff = try HeadsetProtocol.read(FakeHeadset(), autoOff: false)
             check(noOff.hasSidetone && !noOff.hasOff, "auto-off is read only on the headsets known to have it")
         } catch {
@@ -446,7 +465,8 @@ enum SelfTest {
     // from mac/).
     static func layouts() {
         let files = ["g515-tkl.json", "g915-tkl.json", "g915.json", "g915-x.json", "g915-x-tkl.json", "g815.json", "g512-x-75.json",
-                     "g-full.json", "g-60.json", "g213.json", "g413.json"]
+                     "g-full.json", "g-60.json", "g213.json", "g413.json", "g510.json", "g-pro.json", "g410.json", "g810.json",
+                     "g910.json"]
         for file in files {
             guard let layout = KeyLayout.load(file) else { check(false, "the layout \(file) loads"); continue }
             check(layout.rows.count > 3 && layout.keyIds().count == layout.keyNames().count, "the layout \(file) loads")
@@ -487,6 +507,16 @@ enum SelfTest {
         do { _ = try G300Mouse.build(g300Report, MouseSettings(dpi: g300.dpi, stage: g300.stage, buttons: rightChanged)) }
         catch GLiteError.refused { rightRefused = true } catch {}
         check(dpiRefused && rightRefused, "G300: a DPI it can't take and a change to the right button are refused, not dropped")
+        var unreadLevel = g300Report
+        // Byte 4 is level 2, the default: 0x80 alone reads as 0 DPI.
+        unreadLevel[4] = 0x80
+        check((try? G300Mouse.build(unreadLevel, MouseSettings(dpi: 0, stage: 1, light: MouseLight(effect: 0x01, color: 0xFF0000))))?[4] == 0x80,
+              "G300: a level read outside 250 to 2500 DPI stays as it was when a save changes something else")
+        var otherProfileRefused = false
+        // The report shown is profile 2's, the fake mouse on profile 1.
+        do { try G300Mouse().save(FakeG300(), g300, g300Report, MouseSettings(dpi: g300.dpi, stage: g300.stage)) }
+        catch GLiteError.refused { otherProfileRefused = true } catch {}
+        check(otherProfileRefused, "G300: Save refuses when the mouse's profile button moved it off the profile shown")
         do {
             let mouse = FakeG300()
             let state = try G300Mouse().read(mouse)
@@ -782,6 +812,12 @@ enum SelfTest {
         check(added == 4 && edited.zones.count == 4 && edited.zones[3].name == "Zone 5" && edited.zones[3].markColor == ScreenSettings.markColors[4]
               && edited.keys == [0x04: 0, 0x05: 1, 0x06: 2] && full.zones.count == ScreenSettings.maxZones,
               "an added area takes a free colour; a removed one gives its keys to the one before, the others moving up")
+        var stripes = ScreenSettings()
+        stripes.zones[1].area = CGRect(x: 0.3, y: 0.1, width: 0.4, height: 0.2)
+        _ = stripes.add()
+        check((0..<5).allSatisfy { abs(stripes.zones[$0].area.minX - CGFloat($0) * 0.2) < 0.001 && abs(stripes.zones[$0].area.width - 0.2) < 0.001 }
+              && abs(stripes.zones[1].area.minY - 0.1) < 0.001 && abs(stripes.zones[4].area.height - 0.35) < 0.001,
+              "an added zone makes every zone an equal strip, left to right with the new one at the right, each keeping its height")
         var field = KeyField()
         field.ids = [0x04, 0x05, 0x10]; field.x = [0, 0.5, 0.99]
         check(edited.counts(field) == [1, 1, 0, 1], "each area counts the keys it lights")

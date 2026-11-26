@@ -543,6 +543,8 @@ class Slider : DrawnControl
     public int Max = 100, Value, Step = 5;
     // The only values the slider takes, in order, unmarked (ticks under the track were dropped at the owner's request); null for any.
     public int[] Stops;
+    // Off, drawn at 0, for a row whose setting doesn't apply and whose value is blank (Rows.Slider); a read-only slider shows its value.
+    public bool ZeroWhenOff;
     public event EventHandler Changed;
     int wheel, grab;
 
@@ -576,9 +578,11 @@ class Slider : DrawnControl
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
+        // Only once picked (clicked or tabbed to), as Windows' own sliders: otherwise the wheel scrolls the screen it's on, and a
+        // slider passing under the pointer would change, and send its value.
+        if (!Enabled || !Focused) return;
         var handled = e as HandledMouseEventArgs;
         if (handled != null) handled.Handled = true;
-        if (!Enabled) return;
         wheel += e.Delta;
         int notches = wheel / 120;
         if (notches == 0) return;
@@ -616,12 +620,13 @@ class Slider : DrawnControl
         var graphics = Begin(e);
         var color = Enabled ? Theme.Accent : Theme.Border;
         float mid = Height / 2f;
+        int shown = Enabled || !ZeroWhenOff ? Value : 0;
         using (var track = new SolidBrush(Theme.Track))
             graphics.FillRectangle(track, 7 * DpiScale, mid - 2 * DpiScale, Width - 14 * DpiScale, 4 * DpiScale);
         using (var brush = new SolidBrush(color))
         {
-            graphics.FillRectangle(brush, 7 * DpiScale, mid - 2 * DpiScale, X(Value) - 7 * DpiScale, 4 * DpiScale);
-            graphics.FillEllipse(brush, X(Value) - 7 * DpiScale, mid - 7 * DpiScale, 14 * DpiScale, 14 * DpiScale);
+            graphics.FillRectangle(brush, 7 * DpiScale, mid - 2 * DpiScale, X(shown) - 7 * DpiScale, 4 * DpiScale);
+            graphics.FillEllipse(brush, X(shown) - 7 * DpiScale, mid - 7 * DpiScale, 14 * DpiScale, 14 * DpiScale);
         }
         if (Focused && ShowFocusCues && Enabled)
             using (var pen = new Pen(Theme.Text, 2 * DpiScale))
@@ -645,23 +650,41 @@ class Slider : DrawnControl
     }
 }
 
-// A view whose children can be taller than it: they scroll with the mouse wheel, easing to where the wheel points, and a thin bar at
-// the right shows where the view is when there's more than fits (ShowBar; the device list fades its edges instead). Fit says how
-// tall the children are; focus moving into a child scrolls it into view. Wheel turns over a child reach it through the child's
-// parent chain (Windows passes an unhandled WM_MOUSEWHEEL up), except over a control that takes the wheel itself, like Slider.
+// A view whose content can be taller than it. The content goes on Sheet, which scrolls with the mouse wheel, easing to where the
+// wheel points; a thin bar at the right shows where the view is when there's more than fits (ShowBar; the device list has none),
+// its thumb drags, and a click beside it jumps there. Fit says how tall the content is. Wheel turns over the content reach the
+// panel through the parent chain (Windows passes an unhandled WM_MOUSEWHEEL up), except over a focused Slider, which takes them.
+// Scrolling moves Sheet alone, so Windows copies what's on it in one go and paints only the strip that comes into view: moving each
+// control, and repainting it, was slow with a whole page on it.
 class ScrollPanel : Control
 {
     int offset, content, target;
     readonly Timer glide = new Timer { Interval = 15 };
     public bool ShowBar = true;
+    public readonly Control Sheet = new Control();
+    // A drag of the bar: the pointer's height and the offset when it started, -1 when there's none.
+    int grabbedAt = -1, grabbedOffset;
+    bool overBar, scaling;
 
     public ScrollPanel()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.ResizeRedraw, true);
         glide.Tick += (s, e) => Glide();
-        ControlAdded += (s, e) => e.Control.Enter += (sender, args) => Reveal((Control)sender);
+        Controls.Add(Sheet);
+        Sheet.ControlAdded += (s, e) => WatchFocus(e.Control);
     }
+
+    protected override void OnBackColorChanged(EventArgs e)
+    {
+        base.OnBackColorChanged(e);
+        Sheet.BackColor = BackColor;
+    }
+
+    // The bar's strip at the right stays the panel's, out of the sheet.
+    int SheetWidth { get { return ShowBar ? Width - (int)Math.Round(14 * Ui.DpiScale) : Width; } }
+
+    void FitSheet() { Sheet.Bounds = new Rectangle(0, -offset, SheetWidth, Math.Max(content, Height)); }
 
     protected override void Dispose(bool disposing)
     {
@@ -671,20 +694,33 @@ class ScrollPanel : Control
 
     public int Offset { get { return offset; } }
 
-    protected int Content { get { return content; } }
-
-    public void Watch(Control item) { item.GotFocus += (s, e) => Reveal(item); }
+    public int Content { get { return content; } }
 
     public void Fit(int height)
     {
         content = height;
+        FitSheet();
         ScrollTo(offset);
     }
 
-    public void Reveal(Control item)
+    // item is on the sheet.
+    public void Reveal(Control item) { Reveal(item.Bounds); }
+
+    // area is in the sheet's coordinates; the view moves only as far as it takes.
+    void Reveal(Rectangle area)
     {
-        if (item.Top < 0) ScrollTo(offset + item.Top);
-        else if (item.Bottom > Height) ScrollTo(offset + item.Bottom - Height);
+        if (area.Top < offset) ScrollTo(area.Top);
+        else if (area.Bottom > offset + Height) ScrollTo(area.Bottom - Height);
+    }
+
+    // Each control on the sheet, at any depth, scrolls into view when it gets focus (a click or Tab): the control itself, not the box
+    // it's in, since a box taller than the view made the first click in it scroll, under a press that then dragged what it was on
+    // (a zone of the Screen effect); and Tab moves between controls inside one box.
+    void WatchFocus(Control control)
+    {
+        control.GotFocus += (s, e) => Reveal(Sheet.RectangleToClient(control.RectangleToScreen(control.ClientRectangle)));
+        control.ControlAdded += (s, e) => WatchFocus(e.Control);
+        foreach (Control child in control.Controls) WatchFocus(child);
     }
 
     void Wheel(int delta)
@@ -706,14 +742,24 @@ class ScrollPanel : Control
 
     protected override void OnMouseWheel(MouseEventArgs e) { Wheel(e.Delta); base.OnMouseWheel(e); }
 
-    protected override void OnResize(EventArgs e) { base.OnResize(e); ScrollTo(offset); }
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (scaling) return;
+        FitSheet();
+        ScrollTo(offset);
+    }
 
     protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
     {
         offset = (int)Math.Round(offset * factor.Height);
         target = (int)Math.Round(target * factor.Height);
         content = (int)Math.Round(content * factor.Height);
+        // The sheet is scaled after this with the panel's other children: sized here too, at the old scale's bar width, it would
+        // be scaled twice.
+        scaling = true;
         base.ScaleControl(factor, specified);
+        scaling = false;
     }
 
     void ScrollTo(int to)
@@ -726,26 +772,79 @@ class ScrollPanel : Control
     void Shift(int to)
     {
         to = Clamp(to);
-        if (to != offset)
+        if (to == offset) return;
+        offset = to;
+        Sheet.Top = -offset;
+        if (ShowBar) Invalidate();
+    }
+
+    bool HasBar { get { return ShowBar && content > Height; } }
+
+    // The bar takes the panel's right 14 pixels (at 100%), wider than it's drawn, so it's easy to grab.
+    bool OnBar(Point point) { return HasBar && point.X >= Width - 14 * Ui.DpiScale; }
+
+    // The thumb's top and height, and how far it can move.
+    void Thumb(out float top, out float height, out float travel)
+    {
+        float margin = 6 * Ui.DpiScale, track = Height - 2 * margin;
+        height = Math.Max(24 * Ui.DpiScale, track * Height / content);
+        travel = track - height;
+        top = margin + travel * offset / (content - Height);
+    }
+
+    // A press on the bar is the bar's, not the panel's MouseDown. Off the thumb, the thumb jumps there first.
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || !OnBar(e.Location)) { base.OnMouseDown(e); return; }
+        float top, height, travel;
+        Thumb(out top, out height, out travel);
+        if (e.Y < top || e.Y > top + height)
         {
-            SuspendLayout();
-            foreach (Control control in Controls) control.Top += offset - to;
-            ResumeLayout();
-            offset = to;
-            if (ShowBar) Invalidate();
+            ScrollTo((int)Math.Round((e.Y - 6 * Ui.DpiScale - height / 2) * (content - Height) / travel));
         }
-        foreach (Control control in Controls) control.Invalidate();
+        grabbedAt = e.Y;
+        grabbedOffset = offset;
+        Invalidate();
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (grabbedAt >= 0)
+        {
+            float top, height, travel;
+            Thumb(out top, out height, out travel);
+            if (travel > 0) ScrollTo(grabbedOffset + (int)Math.Round((e.Y - grabbedAt) * (content - Height) / travel));
+            // Moves keep coming while dragging, and Windows paints only when none is waiting: what scrolls into view would stay blank
+            // until the drag stops.
+            WindowHelpers.PaintPending(this);
+            return;
+        }
+        bool over = OnBar(e.Location);
+        if (over != overBar) { overBar = over; Invalidate(); }
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (grabbedAt >= 0) { grabbedAt = -1; Invalidate(); }
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (overBar) { overBar = false; Invalidate(); }
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
-        if (!ShowBar || content <= Height) return;
-        float scale = Ui.DpiScale, margin = 6 * scale, track = Height - 2 * margin;
-        float thumb = Math.Max(24 * scale, track * Height / content);
-        float top = margin + (track - thumb) * offset / (content - Height);
+        if (!HasBar) return;
+        float scale = Ui.DpiScale, top, height, travel;
+        Thumb(out top, out height, out travel);
+        var color = overBar || grabbedAt >= 0 ? Theme.Dim : Theme.Track;
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        Ui.Fill(e.Graphics, new RectangleF(Width - 9 * scale, top, 4 * scale, thumb), 2 * scale, Theme.Track, Theme.Track);
+        Ui.Fill(e.Graphics, new RectangleF(Width - 9 * scale, top, 4 * scale, height), 2 * scale, color, color);
     }
 }
 

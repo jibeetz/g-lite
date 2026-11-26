@@ -125,6 +125,14 @@ struct KeyLayout {
     static func forZones(_ device: FoundDevice) -> KeyLayout? {
         guard device.kind == "keyboard" else { return nil }
         let name = device.shortName.uppercased()
-        return name == "G213" ? load("g213.json") : name.hasPrefix("G413") || name.hasPrefix("G512") || name.hasPrefix("G513") ? load("g413.json") : nil
+        // The G512 and G513 have the G413's layout, from their photos (docs/keyboards-8070.md); the G PRO keyboard, G410, G810 and
+        // G910 are drawn from theirs.
+        return name == "G213" ? load("g213.json")
+            : name.hasPrefix("G413") || name.hasPrefix("G512") || name.hasPrefix("G513") ? load("g413.json")
+            : name.hasPrefix("G PRO") ? load("g-pro.json")
+            : name.hasPrefix("G410") ? load("g410.json")
+            : name.hasPrefix("G810") ? load("g810.json")
+            : name.hasPrefix("G910") ? load("g910.json")
+            : nil
     }
 }

@@ -90,11 +90,54 @@ static class WindowHelpers
         return new Font(face, points * 96f / 72f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
     }
 
+    [DllImport("user32.dll")] static extern bool RedrawWindow(IntPtr window, IntPtr area, IntPtr region, int flags);
+
+    // Shows a window once it's painted: cloaked (DWMWA_CLOAK), shown, every control painted at once (RDW_INVALIDATE, RDW_ERASE,
+    // RDW_ALLCHILDREN, RDW_UPDATENOW), then uncloaked. Shown straight from the tray, its controls flash white while they paint,
+    // slower since Trim handed their memory back.
+    public static void ShowPainted(Form form)
+    {
+        int on = 1, off = 0;
+        bool cloaked = false;
+        try { cloaked = DwmSetWindowAttribute(form.Handle, 13, ref on, 4) == 0; } catch (DllNotFoundException) { }
+        form.Show();
+        RedrawWindow(form.Handle, IntPtr.Zero, IntPtr.Zero, 0x1 | 0x4 | 0x80 | 0x100);
+        if (cloaked) DwmSetWindowAttribute(form.Handle, 13, ref off, 4);
+    }
+
+    // Paints what's waiting to be painted in a control and everything in it (RDW_UPDATENOW, RDW_ALLCHILDREN) now, not once the input
+    // queue is empty.
+    public static void PaintPending(Control control)
+    {
+        RedrawWindow(control.Handle, IntPtr.Zero, IntPtr.Zero, 0x80 | 0x100);
+    }
+
     public static void Border(Form form, Color color)
     {
         if (!form.IsHandleCreated) return;
         int colorRef = color.R | color.G << 8 | color.B << 16;
         try { DwmSetWindowAttribute(form.Handle, 34, ref colorRef, 4); } catch (DllNotFoundException) { }
+    }
+
+    struct ThemeOptions { public int Flags, Mask; }
+    [DllImport("uxtheme.dll")] static extern int SetWindowThemeAttribute(IntPtr window, int attribute, ref ThemeOptions options, int size);
+
+    // DWMWA_USE_IMMERSIVE_DARK_MODE is 20, or 19 before Windows 10 20H1; the caption and text colours (35, 36) need Windows 11.
+    // WTNCA_NODRAWCAPTION and WTNCA_NODRAWICON leave the title and icon out of the title bar only: the taskbar and Alt+Tab keep
+    // them (ShowIcon = false can lose the taskbar's icon too).
+    public static void TitleBar(Form form, Color caption, Color text, bool dark)
+    {
+        if (!form.IsHandleCreated) return;
+        var empty = new ThemeOptions { Flags = 3, Mask = 3 };
+        try { SetWindowThemeAttribute(form.Handle, 1, ref empty, 8); } catch (DllNotFoundException) { }
+        int on = dark ? 1 : 0, captionColor = caption.R | caption.G << 8 | caption.B << 16, textColor = text.R | text.G << 8 | text.B << 16;
+        try
+        {
+            if (DwmSetWindowAttribute(form.Handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(form.Handle, 19, ref on, 4);
+            DwmSetWindowAttribute(form.Handle, 35, ref captionColor, 4);
+            DwmSetWindowAttribute(form.Handle, 36, ref textColor, 4);
+        }
+        catch (DllNotFoundException) { }
     }
 
     public static bool Corners(IntPtr handle, Color border)

@@ -58,3 +58,44 @@ enum G510Lighting {
         try hidpp.setFeature([backlight, UInt8(color >> 16 & 0xFF), UInt8(color >> 8 & 0xFF), UInt8(color & 0xFF)], quiet: quiet)
     }
 }
+
+// The G510's G keys and Game mode switch. Input report 0x03 (hid-lg-g15, facts only): G1–G8 in byte 1, G9–G16 in byte 2, G17 and
+// G18 bits 0 and 1 of byte 3, the Game mode switch bit 2 (the keyboard turns its Windows keys off itself), M1–M3 and MR bits 4 to 7.
+// The keyboard keeps no bindings: G-Lite keeps three sets, one per M key, as `gkeys.<device>.m1` to `.m3`, a binding (Buttons.cs's
+// four bytes) per key in hex. Nothing reads the G keys yet, so the bindings do nothing until G-Lite listens to report 0x03.
+enum G510Keys {
+    static let count = 18, banks = 3
+    static let keysReport: UInt8 = 0x03
+    static let names = (1...count).map { "G\($0)" }
+    static let unbound: [UInt8] = [0x80, 0x00, 0x00, 0x00]
+
+    static func fromText(_ text: String) -> [[UInt8]] {
+        let parts = text.split(separator: " ")
+        return (0..<count).map { i in
+            guard i < parts.count, parts[i].count == 8, let value = UInt32(parts[i], radix: 16) else { return unbound }
+            return [UInt8(value >> 24), UInt8(value >> 16 & 0xFF), UInt8(value >> 8 & 0xFF), UInt8(value & 0xFF)]
+        }
+    }
+
+    static func toText(_ bindings: [[UInt8]]) -> String {
+        bindings.map { $0.map { String(format: "%02X", $0) }.joined() }.joined(separator: " ")
+    }
+
+    // Feature 0x04 lights the M keys, one bit each: M1 0x80, M2 0x40, M3 0x20, MR 0x10 (hid-lg-g15; an owner's report reads 80).
+    static let bankLights: UInt8 = 0x04
+
+    static func lightBank(_ hidpp: Hidpp, _ bank: Int) throws { try hidpp.setFeature([bankLights, UInt8(0x80 >> bank)]) }
+
+    // The M key lit, or fallback when none of M1 to M3 is.
+    static func litBank(_ hidpp: Hidpp, _ fallback: Int) throws -> Int {
+        let mask = Int(try hidpp.getFeature(bankLights)[1])
+        return (0..<banks).first { mask & 0x80 >> $0 != 0 } ?? fallback
+    }
+
+    // Asked for once (GET_REPORT), not listened to.
+    static func gameMode(_ hidpp: Hidpp) throws -> Bool {
+        let report = try hidpp.getInput(keysReport)
+        if report.count < 4 { throw GLiteError.io(String(format: "Input report %02X is too short", keysReport)) }
+        return report[3] & 0x04 != 0
+    }
+}

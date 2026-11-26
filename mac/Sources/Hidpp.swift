@@ -165,6 +165,19 @@ final class Port {
         return Array(buffer.prefix(length))
     }
 
+    // One input report, asked for (GET_REPORT), not listened to: the G510's Game mode switch.
+    func getInput(_ id: UInt8) throws -> [UInt8] {
+        try open()
+        var buffer = [UInt8](repeating: 0, count: max(1, Port.int(device, kIOHIDMaxInputReportSizeKey)))
+        buffer[0] = id
+        var length = buffer.count
+        let result = buffer.withUnsafeMutableBufferPointer {
+            IOHIDDeviceGetReport(device, kIOHIDReportTypeInput, CFIndex(id), $0.baseAddress!, &length)
+        }
+        if result != kIOReturnSuccess { throw GLiteError.io(String(format: "Couldn't read input report %02X (0x%08x)", id, result)) }
+        return Array(buffer.prefix(length))
+    }
+
     func setFeature(_ report: [UInt8]) throws {
         try open()
         let padded = report + [UInt8](repeating: 0, count: max(0, featureLength - report.count))
@@ -367,6 +380,16 @@ class Hidpp {
             if let label = deviceLabel { Log.add(label, "sent", "feature  " + Log.hex(report, spaced: true), "error") }
             throw error
         }
+    }
+
+    func getInput(_ id: UInt8) throws -> [UInt8] {
+        Hidpp.tap?(String(format: "get input %02X", id))
+        return try readInput(id)
+    }
+
+    func readInput(_ id: UInt8) throws -> [UInt8] {
+        guard let port = port else { throw GLiteError.io("No device") }
+        return try port.getInput(id)
     }
 
     func readFeature(_ id: UInt8) throws -> [UInt8] {

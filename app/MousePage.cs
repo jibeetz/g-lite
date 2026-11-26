@@ -5,15 +5,26 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 class MousePicture : DrawnControl
 {
+    const float TextGap = 70, TextWidth = 220;
     readonly Stopwatch clock = Stopwatch.StartNew();
     readonly Timer timer = new Timer { Interval = 33 };
     MouseLight light;
     int dpi;
     string stage = "", rate = "";
+    // The PRO family's shape (the G Pro Wireless, the PRO X SUPERLIGHTs), from a photo: a dome at each end, nearly straight sides, the
+    // buttons in grooves set in from the sides, the wheel in its slot, side buttons on both sides, the DPI dots and the light on the
+    // palm, drawn as G-Lite's logo. Dex: the PRO X 2 DEX, right-handed, from its photo: narrower at the front than at the rear, a slight
+    // waist on the left below the side buttons. Other mice get a plain rounded shape.
+    public bool Pro, Dex;
+    // The G502 family's shape, traced from a schematic of the G502 LIGHTSPEED: the buttons as blades either side of a strip with the
+    // wheel, the mode button and G9, G7 and G8 on the left, the thumb rest bulging at the left rear, the palm with the logo and the
+    // DPI lights, both lit in the mouse's colour.
+    public bool G502;
 
     public MousePicture()
     {
@@ -48,29 +59,182 @@ class MousePicture : DrawnControl
         }
     }
 
-    protected override void OnPaint(PaintEventArgs e)
+    // The outline in its box: the G502's, the DEX's, the PRO family's (a little wider at the rear), or a plain rounded one.
+    GraphicsPath Body(RectangleF box)
     {
-        var graphics = Begin(e);
-        float height = Height - 16 * DpiScale, width = height * 0.6f, x = 70 * DpiScale, y = 8 * DpiScale;
-        var body = new RectangleF(x, y, width, height);
-        using (var path = Ui.Round(body, width / 2))
+        if (G502) return G502Body(box);
+        if (!Pro) return Ui.Round(box, box.Width / 2);
+        if (Dex) return DexBody(box);
+        Func<float, float, PointF> at = (across, down) => new PointF(box.X + box.Width * across, box.Y + box.Height * down);
+        var path = new GraphicsPath();
+        path.AddBezier(at(0.5f, 0), at(0.79f, 0), at(0.98f, 0.07f), at(0.985f, 0.22f));
+        path.AddLine(at(0.985f, 0.22f), at(1, 0.7f));
+        path.AddBezier(at(1, 0.7f), at(1, 0.92f), at(0.78f, 1), at(0.5f, 1));
+        path.AddBezier(at(0.5f, 1), at(0.22f, 1), at(0, 0.92f), at(0, 0.7f));
+        path.AddLine(at(0, 0.7f), at(0.015f, 0.22f));
+        path.AddBezier(at(0.015f, 0.22f), at(0.02f, 0.07f), at(0.21f, 0), at(0.5f, 0));
+        path.CloseFigure();
+        return path;
+    }
+
+    // The two button blades at the front with the strip's notch between them, the right side, the rear, and the left side's thumb rest
+    // and side buttons back up to the left blade.
+    static GraphicsPath G502Body(RectangleF box)
+    {
+        Func<float, float, PointF> at = (across, down) => new PointF(box.X + box.Width * across, box.Y + box.Height * down);
+        var path = new GraphicsPath();
+        path.AddLines(new[] { at(0.21f, 0.095f), at(0.477f, 0.018f), at(0.485f, 0.093f), at(0.64f, 0.095f), at(0.621f, 0.002f), at(0.858f, 0.089f) });
+        path.AddBezier(at(0.858f, 0.089f), at(0.9f, 0.12f), at(0.95f, 0.2f), at(0.966f, 0.292f));
+        path.AddLines(new[] { at(0.966f, 0.292f), at(0.992f, 0.704f), at(0.975f, 0.745f) });
+        path.AddBezier(at(0.975f, 0.745f), at(0.96f, 0.9f), at(0.75f, 1), at(0.533f, 1));
+        path.AddBezier(at(0.533f, 1), at(0.35f, 1), at(0.18f, 0.85f), at(0.025f, 0.698f));
+        path.AddLine(at(0.025f, 0.698f), at(0.005f, 0.67f));
+        path.AddBezier(at(0.005f, 0.67f), at(0, 0.55f), at(0.01f, 0.47f), at(0.08f, 0.453f));
+        path.AddLines(new[] { at(0.08f, 0.453f), at(0.1f, 0.45f), at(0.084f, 0.382f), at(0.115f, 0.328f), at(0.098f, 0.28f), at(0.21f, 0.095f) });
+        path.CloseFigure();
+        return path;
+    }
+
+    static GraphicsPath DexBody(RectangleF box)
+    {
+        // Points across (0 left, 1 right) and down (0 front, 1 rear) the box.
+        Func<float, float, PointF> at = (across, down) => new PointF(box.X + box.Width * across, box.Y + box.Height * down);
+        var path = new GraphicsPath();
+        path.AddBezier(at(0.5f, 0), at(0.78f, 0), at(0.92f, 0.06f), at(0.93f, 0.18f));
+        path.AddBezier(at(0.93f, 0.18f), at(0.95f, 0.4f), at(0.99f, 0.55f), at(0.995f, 0.72f));
+        path.AddBezier(at(0.995f, 0.72f), at(1, 0.92f), at(0.78f, 1), at(0.5f, 1));
+        path.AddBezier(at(0.5f, 1), at(0.2f, 1), at(0, 0.9f), at(0.005f, 0.75f));
+        path.AddBezier(at(0.005f, 0.75f), at(0.01f, 0.62f), at(0.07f, 0.58f), at(0.07f, 0.5f));
+        path.AddBezier(at(0.07f, 0.5f), at(0.07f, 0.38f), at(0.04f, 0.28f), at(0.05f, 0.2f));
+        path.AddBezier(at(0.05f, 0.2f), at(0.06f, 0.06f), at(0.22f, 0), at(0.5f, 0));
+        path.CloseFigure();
+        return path;
+    }
+
+    // The plain shape and the PRO family's: their outline, the buttons' grooves, the wheel and the PRO's side buttons and DPI dots.
+    void DrawBody(Graphics graphics, RectangleF body)
+    {
+        float x = body.X, y = body.Y, width = body.Width, height = body.Height;
+        // Where the buttons end.
+        float split = height * (Dex ? 0.46f : Pro ? 0.45f : 0.4f);
+        // Side buttons: both sides on the G Pro's family (ambidextrous), the left only on the DEX.
+        if (Pro)
+            foreach (var side in Dex ? new[] { 0f } : new[] { 0f, 1f })
+                foreach (var buttonTop in Dex ? new[] { 0.28f, 0.45f } : new[] { 0.44f, 0.53f })
+                    Ui.Fill(graphics, new RectangleF(x + (Dex ? width * 0.05f : side * width) - 2.5f * DpiScale, y + height * buttonTop,
+                        5 * DpiScale, height * (Dex ? 0.16f : 0.085f)), 2 * DpiScale, Theme.KeyOff, Theme.Border);
+        using (var path = Body(body))
         {
             using (var brush = new SolidBrush(Theme.KeyOff)) graphics.FillPath(brush, path);
             graphics.SetClip(path);
             using (var pen = new Pen(Theme.PictureBackground, 1.5f * DpiScale))
             {
-                graphics.DrawLine(pen, x + width / 2, y, x + width / 2, y + height * 0.4f);
-                graphics.DrawLine(pen, x, y + height * 0.4f, x + width, y + height * 0.4f);
+                graphics.DrawLine(pen, x + width / 2, y, x + width / 2, y + split);
+                if (Pro)
+                {
+                    // The buttons' outer grooves, from the notch near the front to where they end (the DEX's, from its photo).
+                    float notch = Dex ? 0.12f : 0.1f, leftTop = Dex ? 0.12f : 0.07f, leftBottom = Dex ? 0.15f : 0.1f,
+                        rightTop = Dex ? 0.91f : 0.93f, rightBottom = Dex ? 0.89f : 0.9f;
+                    // The buttons' rear corners are rounded, as on the mouse.
+                    float corner = width * 0.06f, left = x + width * leftBottom, right = x + width * rightBottom, bottom = y + split;
+                    using (var grooves = new GraphicsPath())
+                    {
+                        grooves.AddLine(x, y + height * notch, x + width * leftTop, y + height * notch);
+                        grooves.AddLine(x + width * leftTop, y + height * notch, left, bottom - corner);
+                        grooves.AddBezier(left, bottom - corner, left, bottom - corner * 0.45f, left + corner * 0.45f, bottom, left + corner, bottom);
+                        grooves.AddLine(left + corner, bottom, right - corner, bottom);
+                        grooves.AddBezier(right - corner, bottom, right - corner * 0.45f, bottom, right, bottom - corner * 0.45f, right, bottom - corner);
+                        grooves.AddLine(right, bottom - corner, x + width * rightTop, y + height * notch);
+                        grooves.AddLine(x + width * rightTop, y + height * notch, x + width, y + height * notch);
+                        graphics.DrawPath(pen, grooves);
+                    }
+                }
+                else graphics.DrawLine(pen, x, y + split, x + width, y + split);
             }
             graphics.ResetClip();
             using (var pen = new Pen(Theme.Border)) graphics.DrawPath(pen, path);
         }
-        Ui.Fill(graphics, new RectangleF(x + width / 2 - 4 * DpiScale, y + height * 0.12f, 8 * DpiScale, height * 0.17f),
-            4 * DpiScale, Theme.PictureBackground, Theme.PictureBackground);
+        if (Pro)
+        {
+            // The wheel in its slot, ridged.
+            var slot = Dex ? new RectangleF(x + width * 0.43f, y + height * 0.135f, width * 0.15f, height * 0.165f)
+                : new RectangleF(x + width * 0.415f, y + height * 0.11f, width * 0.17f, height * 0.17f);
+            Ui.Fill(graphics, slot, slot.Width * 0.35f, Theme.PictureBackground, Theme.PictureBackground);
+            var wheel = new RectangleF(slot.X + slot.Width * 0.25f, slot.Y + slot.Height * 0.08f, slot.Width * 0.5f, slot.Height * 0.84f);
+            Ui.Fill(graphics, wheel, wheel.Width / 2, Theme.Border, Theme.Border);
+            using (var pen = new Pen(Theme.PictureBackground, 1 * DpiScale))
+                for (int ridge = 1; ridge < 8; ridge++)
+                    graphics.DrawLine(pen, wheel.X + 1 * DpiScale, wheel.Y + wheel.Height * ridge / 8, wheel.Right - 1 * DpiScale, wheel.Y + wheel.Height * ridge / 8);
+        }
+        if (Pro && !Dex)
+            using (var brush = new SolidBrush(Theme.Border))
+                for (int dot = 0; dot < 3; dot++)
+                    graphics.FillEllipse(brush, x + width / 2 - 1.5f * DpiScale, y + height * (0.485f + dot * 0.03f), 3 * DpiScale, 3 * DpiScale);
+        if (!Pro)
+            Ui.Fill(graphics, new RectangleF(x + width / 2 - 4 * DpiScale, y + height * 0.12f, 8 * DpiScale, height * 0.17f),
+                4 * DpiScale, Theme.PictureBackground, Theme.PictureBackground);
+    }
+
+    // The G502, in points across (0 left, 1 right) and down (0 front, 1 rear) its box, traced from the schematic.
+    void DrawG502(Graphics graphics, RectangleF body)
+    {
+        Func<float, float, PointF> at = (across, down) => new PointF(body.X + body.Width * across, body.Y + body.Height * down);
+        using (var path = Body(body))
+        {
+            using (var brush = new SolidBrush(Theme.KeyOff)) graphics.FillPath(brush, path);
+            graphics.SetClip(path);
+            using (var pen = new Pen(Theme.PictureBackground, 1.5f * DpiScale) { LineJoin = LineJoin.Round })
+            {
+                // The strip between the buttons, each button's rear edge, and its outer edge along G7 and G8.
+                graphics.DrawLine(pen, at(0.485f, 0.093f), at(0.523f, 0.549f));
+                graphics.DrawLine(pen, at(0.64f, 0.095f), at(0.658f, 0.52f));
+                graphics.DrawLine(pen, at(0.255f, 0.563f), at(0.52f, 0.5f));
+                graphics.DrawLine(pen, at(0.66f, 0.47f), at(0.905f, 0.513f));
+                graphics.DrawLines(pen, new[] { at(0.234f, 0.095f), at(0.22f, 0.43f), at(0.255f, 0.563f) });
+                graphics.DrawLine(pen, at(0.105f, 0.274f), at(0.23f, 0.262f));
+                graphics.DrawLine(pen, at(0.109f, 0.289f), at(0.25f, 0.561f));
+                // The palm: its front edge across to the right side, its rear edge round the logo, and the rear's split.
+                graphics.DrawLines(pen, new[] { at(0.192f, 0.624f), at(0.659f, 0.527f), at(0.88f, 0.546f), at(0.878f, 0.668f) });
+                graphics.DrawBezier(pen, at(0.878f, 0.668f), at(0.9f, 0.7f), at(0.95f, 0.71f), at(0.975f, 0.745f));
+                graphics.DrawBezier(pen, at(0.209f, 0.626f), at(0.215f, 0.72f), at(0.27f, 0.78f), at(0.523f, 0.833f));
+                graphics.DrawLine(pen, at(0.523f, 0.833f), at(0.523f, 1));
+                graphics.DrawLine(pen, at(0.586f, 0.835f), at(0.611f, 1));
+            }
+            graphics.ResetClip();
+            using (var pen = new Pen(Theme.Border)) graphics.DrawPath(pen, path);
+        }
+        // The wheel in its slot, then the mode button and G9 below it; the arrows either side for its tilt.
+        var slot = new RectangleF(at(0.505f, 0.16f), new SizeF(body.Width * 0.135f, body.Height * 0.175f));
+        Ui.Fill(graphics, slot, slot.Width * 0.3f, Theme.PictureBackground, Theme.PictureBackground);
+        var wheel = new RectangleF(slot.X + slot.Width * 0.22f, slot.Y + slot.Height * 0.08f, slot.Width * 0.56f, slot.Height * 0.84f);
+        Ui.Fill(graphics, wheel, wheel.Width * 0.3f, Theme.Border, Theme.Border);
+        using (var pen = new Pen(Theme.PictureBackground, 1 * DpiScale))
+            for (int ridge = 1; ridge < 8; ridge++)
+                graphics.DrawLine(pen, wheel.X + 1 * DpiScale, wheel.Y + wheel.Height * ridge / 8, wheel.Right - 1 * DpiScale, wheel.Y + wheel.Height * ridge / 8);
+        foreach (var button in new[] { new RectangleF(at(0.515f, 0.357f), new SizeF(body.Width * 0.125f, body.Height * 0.066f)),
+            new RectangleF(at(0.52f, 0.435f), new SizeF(body.Width * 0.12f, body.Height * 0.078f)) })
+            Ui.Fill(graphics, button, 2 * DpiScale, Theme.KeyOff, Theme.PictureBackground);
+        using (var brush = new SolidBrush(Theme.Border))
+        {
+            graphics.FillPolygon(brush, new[] { at(0.405f, 0.25f), at(0.44f, 0.237f), at(0.44f, 0.263f) });
+            graphics.FillPolygon(brush, new[] { at(0.73f, 0.25f), at(0.695f, 0.237f), at(0.695f, 0.263f) });
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var graphics = Begin(e);
+        // The mouse and its text centred together, the text counted at a fixed width so the picture doesn't move as the DPI does.
+        float height = Height - 16 * DpiScale, width = height * (G502 ? 0.57f : Dex ? 0.54f : Pro ? 0.5f : 0.6f), y = 8 * DpiScale;
+        float x = Math.Max(8 * DpiScale, (Width - width - TextGap * DpiScale - TextWidth * DpiScale) / 2);
+        var body = new RectangleF(x, y, width, height);
+        if (G502) DrawG502(graphics, body);
+        else DrawBody(graphics, body);
 
         var color = Glow(clock.Elapsed.TotalSeconds);
         int max = Math.Max(color.R, Math.Max(color.G, color.B));
-        float radius = width * 0.17f, centerX = x + width / 2, centerY = y + height * 0.68f;
+        float radius = width * (G502 ? 0.09f : Dex ? 0.1f : Pro ? 0.12f : 0.17f), centerX = x + width * (G502 ? 0.4f : 0.5f),
+            centerY = y + height * (G502 ? 0.686f : Dex ? 0.74f : Pro ? 0.75f : 0.68f);
         var fill = Theme.KeyOff;
         if (max > 0)
         {
@@ -85,16 +249,21 @@ class MousePicture : DrawnControl
                     SurroundColors = new[] { Color.FromArgb(0, full) }
                 })
                 {
-                    using (var clip = Ui.Round(body, width / 2)) graphics.SetClip(clip);
+                    using (var clip = Body(body)) graphics.SetClip(clip);
                     graphics.FillPath(glowBrush, glowPath);
                     graphics.ResetClip();
                 }
             }
         }
-        else fill = Theme.PictureBackground;
-        using (var brush = new SolidBrush(fill)) graphics.FillEllipse(brush, centerX - radius, centerY - radius, 2 * radius, 2 * radius);
+        else fill = Pro || G502 ? Theme.Border : Theme.PictureBackground;
+        if (G502)
+            using (var pen = new Pen(fill, 1.5f * DpiScale) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                for (int dpiLight = 0; dpiLight < 3; dpiLight++)
+                    graphics.DrawLine(pen, x + width * 0.183f, y + height * (0.459f + dpiLight * 0.036f), x + width * 0.168f, y + height * (0.483f + dpiLight * 0.036f));
+        if (Pro || G502) Logo.Paint(graphics, new RectangleF(centerX - radius, centerY - radius, 2 * radius, 2 * radius), fill, Theme.KeyOff);
+        else using (var brush = new SolidBrush(fill)) graphics.FillEllipse(brush, centerX - radius, centerY - radius, 2 * radius, 2 * radius);
 
-        float textX = x + width + 70 * DpiScale, top = Height / 2f - 46 * DpiScale;
+        float textX = x + width + TextGap * DpiScale, top = Height / 2f - 46 * DpiScale;
         var bigFont = Ui.Get(27f, Ui.Semibold);
         var text = dpi > 0 ? dpi.ToString() : "–";
         Ui.Draw(graphics, text, bigFont, new RectangleF(textX, top, Width - textX, 48 * DpiScale),
@@ -119,10 +288,15 @@ class MousePage : DevicePage
     int sequence;
     readonly Timer debounce = new Timer { Interval = 120 }, watch = new Timer { Interval = 5000 };
     readonly Toggle invert;
-    readonly Label invertLabel;
     readonly SegmentedPicker viewPick;
-    readonly RoundedBox buttonsBox;
-    readonly Control[] settingsArea;
+    // Settings' sections and the rows a mouse may not have, in design units; the Bindings view's buttons, one row each.
+    readonly RowLayout layout;
+    readonly RoundedBox sensitivity, lighting, buttonsBox;
+    readonly int stageRow, rateRow, invertRow, noteRow, effectRowY, colorRow, brightRow, speedRow;
+    readonly RowText stageText, rateText, effectText, colorText, brightText, speedText;
+    readonly Label buttonsHeading;
+    const int PictureHeight = 168, PickerWidth = 336, NotePadding = 14;
+    const string UnsupportedLight = "G-Lite can't set this mouse's lighting yet.";
     readonly ButtonRows buttonRows;
     readonly Timer pressedTimer = new Timer { Interval = 1500 };
     bool showingButtons, spying;
@@ -130,8 +304,9 @@ class MousePage : DevicePage
 
     internal override bool Busy { get { return debounce.Enabled; } }
 
-    readonly Label lightHead, colorHead, speedHead, speedValue, brightHead, brightValue, stageHead, dpiValue, rateHead, rateHint;
-    readonly SegmentedPicker effects, stages, rates;
+    readonly Label speedValue, brightValue, dpiValue;
+    readonly SegmentedPicker stages, rates;
+    readonly Dropdown effects;
     readonly ColorRow colors;
     readonly Slider speed, bright, dpi;
     readonly MousePicture picture;
@@ -139,24 +314,58 @@ class MousePage : DevicePage
     Backups.Entry fix;
     readonly IMouse mouse;
 
-    public MousePage(FoundDevice found, Hidpp fake, MouseEventHandler drag, IMouse mouse)
-        : base(found, fake, drag, found.ShortName, "mouse", "profile." + found.SettingsKey + ".")
+    public MousePage(FoundDevice found, Hidpp fake, IMouse mouse)
+        : base(found, fake, found.ShortName, "mouse", "profile." + found.SettingsKey + ".")
     {
         this.mouse = mouse;
         debounce.Tick += (s, e) => { debounce.Stop(); Send(); };
         backupsButton = BackupsButton("mouse's profile");
         backupsButton.Click += (s, e) => ShowBackups();
 
-        var pictureBox = Ui.Add(this, new RoundedBox(), 20, 118, 616, 209);
-        Ui.Text(pictureBox, "Live on the mouse", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        picture = Ui.Add(pictureBox, new MousePicture(), 14, 36, 588, 161);
+        // The picture stays above the rows, which scroll under it.
+        picture = Ui.Add(this, new MousePicture(), 20, BodyTop, Rows.Width, PictureHeight);
+        string upper = found.Name.ToUpperInvariant();
+        picture.Pro = Regex.IsMatch(upper, @"\bPRO\b");
+        picture.Dex = Regex.IsMatch(upper, @"\bDEX\b");
+        picture.G502 = upper.Contains("G502");
+        var sheet = UseBody(BodyTop + PictureHeight + 12).Sheet;
+        layout = new RowLayout(sheet);
 
-        var light = Ui.Add(this, new RoundedBox(), 20, 339, 380, 272);
-        lightHead = Ui.Text(light, "Lighting", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        Ui.Text(light, "Effect", 14, 40, () => Theme.Dim, 9f);
-        effects = Ui.Add(light,
-            new SegmentedPicker { Items = MouseProtocol.Effects.Select(effect => effect.Name).ToArray(), AccessibleName = "Effect" },
-            14, 58, 352, 32);
+        // Sensitivity first: DPI is what's changed most, and some mice have no lighting. Rows a mouse doesn't have go once it's read.
+        Label heading;
+        sensitivity = layout.Section("Sensitivity", out heading);
+        stageRow = layout.Row(sensitivity);
+        stageText = Rows.Row(sensitivity, stageRow, "DPI stage", "The DPI buttons switch between these");
+        stages = Rows.Picker(sensitivity, stageRow, "DPI stage", new string[0], PickerWidth);
+        stages.Picked += index => { current.Stage = index; current.Dpi = state.Stages[index]; Changed(true); };
+        int dpiRow = layout.Row(sensitivity);
+        Rows.Row(sensitivity, dpiRow, "DPI", "The picked stage's sensitivity");
+        dpi = Rows.Slider(sensitivity, dpiRow, "DPI", out dpiValue);
+        dpi.Step = 1;
+        // DPI always applies: off only on a read-only mouse, which shows its value.
+        dpi.ZeroWhenOff = false;
+        dpi.Changed += (s, e) => { if (state != null && state.Dpis.Length > 0) { current.Dpi = state.Dpis[dpi.Value]; Changed(false); } };
+        rateRow = layout.Row(sensitivity);
+        rateText = Rows.Row(sensitivity, rateRow, "Report rate", "");
+        rates = Rows.Picker(sensitivity, rateRow, "Report rate", new string[0], PickerWidth);
+        rates.Picked += index =>
+        {
+            if (!state.Onboard) { current.Rate = state.Rates[index]; Edited(); SendRate(state.Rates[index]); return; }
+            current.Rate = state.Rates[index];
+            Changed(true);
+        };
+        invertRow = layout.Row(sensitivity);
+        Rows.Row(sensitivity, invertRow, "Invert scrolling", "The wheel scrolls the other way");
+        invert = Rows.Toggle(sensitivity, invertRow, "Invert scrolling");
+        invert.Changed += () => SetInvert(invert.Checked);
+
+        lighting = layout.Section("Lighting", out heading);
+        noteRow = layout.Row(lighting, Rows.NoteHeight(UnsupportedLight) + 2 * NotePadding);
+        Rows.Note(lighting, noteRow + NotePadding, UnsupportedLight);
+        int effectRow = layout.Row(lighting);
+        effectText = Rows.Row(lighting, effectRow, "Effect", "");
+        effects = Rows.Dropdown(lighting, effectRow, "Effect");
+        effects.Items.AddRange(mouse.Effects.Select(effect => effect.Name));
         effects.Picked += index =>
         {
             var effect = Effects[index];
@@ -166,17 +375,17 @@ class MousePage : DevicePage
                 edited.Period = effect.DefaultPeriod;
             Changed(true);
         };
-        colorHead = Ui.Text(light, "Color", 14, 98, () => Theme.Dim, 9f);
-        colors = new ColorRow(light, 115);
+        colorRow = layout.Row(lighting);
+        colorText = Rows.Row(lighting, colorRow, "Color", "The effect's color");
+        colors = new ColorRow(lighting, Rows.Width - Rows.Inset - ColorRow.Widest, colorRow + (Ui.RowHeight - ColorRow.Size) / 2, true);
         colors.Picked += color => { Light().Color = color; Changed(true); };
-
-        brightHead = Ui.Text(light, "Brightness", 14, 156, () => Theme.Dim, 9f);
-        brightValue = Value(light, 14, 156, 172);
-        bright = Ui.Add(light, new Slider { AccessibleName = "Brightness" }, 14, 176, 172, 24);
+        brightRow = layout.Row(lighting);
+        brightText = Rows.Row(lighting, brightRow, "Brightness", "How bright the light is");
+        bright = Rows.Slider(lighting, brightRow, "Brightness", out brightValue);
         bright.Changed += (s, e) => { Light().Bright = Math.Max(1, bright.Value); Changed(false); };
-        speedHead = Ui.Text(light, "Speed", 194, 156, () => Theme.Dim, 9f);
-        speedValue = Value(light, 194, 156, 172);
-        speed = Ui.Add(light, new Slider { AccessibleName = "Speed" }, 194, 176, 172, 24);
+        speedRow = layout.Row(lighting);
+        speedText = Rows.Row(lighting, speedRow, "Speed", "How fast the effect moves");
+        speed = Rows.Slider(lighting, speedRow, "Speed", out speedValue);
         speed.Changed += (s, e) =>
         {
             var edited = Light();
@@ -184,48 +393,23 @@ class MousePage : DevicePage
             edited.Period = SpeedScale.Period(speed.Value, effect.MinPeriod, effect.MaxPeriod);
             Changed(false);
         };
-
-        var sensitivity = Ui.Add(this, new RoundedBox(), 412, 339, 224, 272);
-        Ui.Text(sensitivity, "Sensitivity", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        stageHead = Ui.Text(sensitivity, "DPI stage", 14, 40, () => Theme.Dim, 9f);
-        stages = Ui.Add(sensitivity, new SegmentedPicker { AccessibleName = "DPI stage" }, 14, 58, 196, 32);
-        stages.Picked += index => { current.Stage = index; current.Dpi = state.Stages[index]; Changed(true); };
-        Ui.Text(sensitivity, "DPI", 14, 98, () => Theme.Dim, 9f);
-        dpiValue = Value(sensitivity, 14, 98, 196);
-        dpi = Ui.Add(sensitivity, new Slider { AccessibleName = "DPI", Step = 1 }, 14, 118, 196, 24);
-        dpi.Changed += (s, e) => { if (state != null && state.Dpis.Length > 0) { current.Dpi = state.Dpis[dpi.Value]; Changed(false); } };
-        rateHead = Ui.Text(sensitivity, "Report rate", 14, 156, () => Theme.Dim, 9f);
-        rates = Ui.Add(sensitivity, new SegmentedPicker { AccessibleName = "Report rate" }, 14, 174, 196, 32);
-        rates.Picked += index =>
-        {
-            if (!state.Onboard) { current.Rate = state.Rates[index]; Edited(); SendRate(state.Rates[index]); return; }
-            current.Rate = state.Rates[index];
-            Changed(true);
-        };
-        rateHint = Ui.Text(sensitivity, "", 14, 212, () => Theme.Dim, 9f);
-        rateHint.AutoSize = false;
-        rateHint.Size = new Size(196, 24);
-        invert = Ui.Add(sensitivity, new Toggle { AccessibleName = "Invert scrolling", Visible = false }, 14, 242, 34, 18);
-        invert.Changed += () => SetInvert(invert.Checked);
-        invertLabel = Ui.Text(sensitivity, "Invert scrolling", 56, 242, () => Theme.Text, 9f);
-        invertLabel.Visible = false;
-        invert.Follow(invertLabel);
+        effectRowY = effectRow;
         watch.Tick += (s, e) => Watch();
         if (!Manual) watch.Start();
 
-
-        settingsArea = new Control[] { pictureBox, light, sensitivity };
         viewPick = Ui.Add(this, new SegmentedPicker { Items = new[] { "Settings", "Bindings" }, AccessibleName = "View", Visible = false },
             440, 72, 196, 32);
         viewPick.Picked += index => ShowView(index == 1);
-        buttonsBox = Ui.Add(this, new RoundedBox { Visible = false }, 20, 118, 616, 543);
-        Ui.Text(buttonsBox, "Buttons", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        buttonRows = new ButtonRows(buttonsBox, Bindings.MouseActions, Value(buttonsBox, 200, 12, 402));
+        int buttonsTop = 0;
+        buttonsBox = Rows.Section(sheet, "Buttons", ref buttonsTop, new RoundedBox(), 0, out buttonsHeading);
+        // The hint (the button to press while finding one) on the title's line, at its right.
+        buttonRows = new ButtonRows(buttonsBox, Bindings.MouseActions, Value(sheet, 220, 0, Rows.Width - 200));
         buttonRows.Assigned += (row, binding) => { if (!loading && state != null && current.Buttons != null) Assign(row, binding); };
         pressedTimer.Tick += (s, e) => { pressedTimer.Stop(); buttonRows.Pressed = -1; SyncButtons(); };
 
         saveButton = Ui.Add(this, new FlatButton { Style = ButtonStyle.Primary, Text = "Save to mouse" }, 496, 685, 140, 32);
         saveButton.Click += (s, e) => Save();
+        InFooter(saveButton);
 
         RefreshControls();
     }
@@ -294,29 +478,45 @@ class MousePage : DevicePage
         // The G300 (SaveOnly) has no brightness: each colour is on or off.
         bool color = known && effect.Color, hasSpeed = known && effect.Speed,
             hasBrightness = known && light.Effect != 0x00 && !state.SaveOnly;
-        lightHead.Text = !ready || lit
-            ? (light == null && lit ? "Lighting (as saved on the mouse)"
-                : found.LightIsLiveOnly ? "Lighting (live only)"
-                : "Lighting")
-            : found.Has(0x8071) ? "Lighting (not supported yet)"
-            : "Lighting (not supported on this mouse)";
-        effects.Items = Effects.Select(info => info.Name).ToArray();
+        bool hasStages = ready && state.Stages.Length > 0;
+        // Before the mouse is read every row it may have shows, but Invert scrolling, which few have.
+        bool unsupported = ready && !lit && found.Has(0x8071), lightRows = !ready || lit;
+        layout.ShowRow(sensitivity, stageRow, !ready || hasStages);
+        layout.ShowRow(sensitivity, rateRow, !ready || state.Rates.Length > 0);
+        layout.ShowRow(sensitivity, invertRow, ready && state.CanInvert);
+        layout.ShowSection(lighting, lightRows || unsupported);
+        layout.ShowRow(lighting, noteRow, unsupported);
+        foreach (int row in new[] { effectRowY, colorRow, speedRow }) layout.ShowRow(lighting, row, lightRows);
+        // The G300 (SaveOnly) has no brightness at all.
+        layout.ShowRow(lighting, brightRow, lightRows && !(ready && state.SaveOnly));
+        bool canBind = ready && state.ButtonCount > 0 && state.Buttons != null;
+        if (!canBind && showingButtons) ShowView(false);
+        PlaceView();
+        // The light as saved on the mouse when there's no record of it shows no effect, so the row says why.
+        effectText.Hint.Text = found.LightIsLiveOnly ? "Live only: not saved to the mouse"
+            : lit && light == null ? "As saved on the mouse"
+            : "What the lighting does";
+        var effectNames = Effects.Select(info => info.Name).ToList();
+        if (!effectNames.SequenceEqual(effects.Items)) { effects.Items.Clear(); effects.Items.AddRange(effectNames); }
         effects.Enabled = lit && live;
         effects.Index = known ? Array.FindIndex(Effects, info => info.Id == light.Effect) : -1;
-        SetDimmed(colorHead, color);
+        effects.Invalidate();
+        colorText.Enable(color);
         colors.RefreshControls(light == null ? 0xFFFFFF : light.Color, color, live);
-        SetDimmed(brightHead, hasBrightness);
+        brightText.Enable(hasBrightness);
         bright.Enabled = hasBrightness && live;
+        // At 0 only when it doesn't apply, its value blank then; a read-only mouse's shows its value.
+        bright.ZeroWhenOff = !hasBrightness;
         bright.Value = light == null ? 100 : light.Bright;
         brightValue.Text = hasBrightness ? light.Bright + "%" : "";
         bright.Invalidate();
-        SetDimmed(speedHead, hasSpeed);
+        speedText.Enable(hasSpeed);
         speed.Enabled = hasSpeed && live;
+        speed.ZeroWhenOff = !hasSpeed;
         if (hasSpeed) speed.Value = SpeedScale.Percent(light.Period, effect.MinPeriod, effect.MaxPeriod);
         speedValue.Text = hasSpeed ? speed.Value + "%" : "";
         speed.Invalidate();
 
-        bool hasStages = ready && state.Stages.Length > 0;
         int stage = !hasStages ? -1
             : !state.Writable ? Array.IndexOf(state.Stages, current.Dpi)
             : current.Stage >= 0 && current.Stage < state.Stages.Length ? current.Stage
@@ -326,7 +526,7 @@ class MousePage : DevicePage
         stages.Items = hasStages ? view.Select(stageDpi => stageDpi.ToString()).ToArray() : new[] { "–" };
         stages.Enabled = hasStages && live;
         stages.Index = stage;
-        SetDimmed(stageHead, hasStages);
+        stageText.Enable(hasStages);
         dpi.Enabled = live && state.Dpis.Length > 0;
         dpi.Max = Math.Max(1, ready ? state.Dpis.Length - 1 : 1);
         dpi.Value = ready && state.Dpis.Length > 0 ? Nearest(state.Dpis, current.Dpi) : 0;
@@ -340,14 +540,12 @@ class MousePage : DevicePage
         rates.Index = ready ? Array.IndexOf(state.Rates, rate) : -1;
         rates.Enabled = rateOn;
         rates.Invalidate();
-        SetDimmed(rateHead, rateOn);
-        rateHead.Text = "Report rate" + (ready && state.Rates.Length > 0 ? " (Hz)" : "")
-            + (ready && state.Onboard && state.Savable ? ", on save" : "");
-        rateHint.Text = !ready || state.ReadOnly || !state.Onboard || state.Savable ? "" : "Set by the saved profile.";
-        invert.Visible = invertLabel.Visible = ready && state.CanInvert;
+        rateText.Enable(rateOn);
+        rateText.Hint.Text = ready && state.Onboard && state.Savable ? "In Hz, applies when you save"
+            : ready && state.Onboard && !state.ReadOnly ? "In Hz, set by the saved profile"
+            : "How often the mouse reports, in Hz";
         invert.Checked = ready && state.Inverted;
-        viewPick.Visible = ready && state.ButtonCount > 0 && state.Buttons != null;
-        if (!viewPick.Visible && showingButtons) ShowView(false);
+        viewPick.Visible = canBind;
         viewPick.Index = showingButtons ? 1 : 0;
         SyncButtons();
         saveButton.Enabled = ready && state.Savable && dirty && Keepable;
@@ -387,13 +585,13 @@ class MousePage : DevicePage
         bool rate = stored != null && state.Onboard && current.Rate > 0 && current.Rate != stored.Rate;
         // A format 6 to 8 mouse only takes its stages' DPI, so an edited stage waits for the save (HidppMouse.SendDpi). On a mouse
         // with nothing live (the G300, SaveOnly) everything does, the picked stage and the lighting too.
-        bool dpi = (MouseProtocol.State.WideFormat(state.Format) || state.SaveOnly) && state.Savable && current.Stage >= 0
+        bool dpiWaits = (MouseProtocol.State.WideFormat(state.Format) || state.SaveOnly) && state.Savable && current.Stage >= 0
             && current.Stage < state.Stages.Length
             && (current.Dpi != state.Stages[current.Stage] || (state.SaveOnly && stored != null && current.Stage != stored.Stage));
-        bool lighting = state.SaveOnly && stored != null && current.Light != null && !current.Light.Same(stored.Light);
+        bool lightingWaits = state.SaveOnly && stored != null && current.Light != null && !current.Light.Same(stored.Light);
         var waiting = new List<string>();
-        if (dpi) waiting.Add("DPI");
-        if (lighting) waiting.Add("lighting");
+        if (dpiWaits) waiting.Add("DPI");
+        if (lightingWaits) waiting.Add("lighting");
         if (buttons) waiting.Add("buttons");
         if (rate) waiting.Add("report rate");
         if (dirty && waiting.Count > 0)
@@ -527,11 +725,23 @@ class MousePage : DevicePage
     {
         showingButtons = buttons;
         buttonRows.Recording = -1;
-        foreach (var control in settingsArea) control.Visible = !buttons;
-        buttonsBox.Visible = buttons;
         if (buttons) StartSpy(); else StopSpy();
         viewPick.Index = buttons ? 1 : 0;
         SyncButtons();
+        PlaceView();
+    }
+
+    // Settings' sections with the rows this mouse has, or the Bindings view's buttons, a row each.
+    void PlaceView()
+    {
+        buttonsHeading.Visible = buttonsBox.Visible = buttonRows.Hint.Visible = showingButtons;
+        int height = layout.Place(Scaled, !showingButtons);
+        if (showingButtons)
+        {
+            buttonsBox.Height = Scaled(ButtonCount * Ui.RowHeight);
+            height = Rows.TitleGap + ButtonCount * Ui.RowHeight + Rows.SectionGap;
+        }
+        FitBody(height);
     }
 
     void SyncButtons()

@@ -86,6 +86,11 @@ final class MousePage: DevicePage {
         row.alignment = .top
         row.distribution = .fillEqually
         left.heightAnchor.constraint(equalTo: right.heightAnchor).isActive = true
+        let upper = device.name.uppercased()
+        // Whole words: PRO, not the G102 Prodigy.
+        picture.pro = upper.range(of: "\\bPRO\\b", options: .regularExpression) != nil
+        picture.dex = upper.range(of: "\\bDEX\\b", options: .regularExpression) != nil
+        picture.g502 = upper.contains("G502")
         pictureBox = Ui.box("Live on the mouse", picture)
         picture.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
         let settings = Ui.column([pictureBox, row], spacing: 18)

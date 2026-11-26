@@ -8,9 +8,9 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyVersion("0.0.38")]
-[assembly: System.Reflection.AssemblyFileVersion("0.0.38")]
-[assembly: System.Reflection.AssemblyInformationalVersion("0.0.38-alpha")]
+[assembly: System.Reflection.AssemblyVersion("0.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.1.0")]
+[assembly: System.Reflection.AssemblyInformationalVersion("0.1.0-beta")]
 [assembly: System.Reflection.AssemblyTitle("G-Lite")]
 [assembly: System.Reflection.AssemblyProduct("G-Lite")]
 [assembly: System.Reflection.AssemblyCompany("com.csmarvz")]
@@ -19,7 +19,7 @@ class MainWindow : Form
 {
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     const string ApprovedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
-    const int SettingsHeader = 52, WindowWidth = 868, WindowHeight = 730, SidebarWidth = 212, SidebarInnerWidth = SidebarWidth - 20;
+    const int SettingsHeader = 52, WindowWidth = 868, WindowHeight = 730, SidebarWidth = 212, SidebarInnerWidth = SidebarWidth - 20, ListTop = 32;
 
     public NotifyIcon Tray;
     readonly FakeHidpp fake;
@@ -39,83 +39,73 @@ class MainWindow : Form
     int navTop;
     bool rowShown, labelShown;
     string ready;
-    readonly Control side, settingsPage;
-    readonly FlatButton settingsButton, logsButton, scanButton, minimize, close;
+    readonly Control side, settingsPage, corner;
+    readonly FlatButton settingsButton, logsButton, scanButton;
     readonly LogsPage logsPage;
     readonly System.Windows.Forms.Timer rescanSoon = new System.Windows.Forms.Timer { Interval = 1500 },
         sleepers = new System.Windows.Forms.Timer { Interval = 15000 },
         batteries = new System.Windows.Forms.Timer { Interval = 60000 };
     readonly FlatButton updateButton;
     readonly UpdatePage updatePage;
-    readonly Label checkText, themeHint;
-    readonly SegmentedPicker themePicker;
+    readonly Label checkText, themeHint, accentHint;
+    readonly SegmentedPicker themePicker, accentPicker;
     readonly Toggle runToggle, checkToggle, autoToggle;
     KeyboardView view;
     readonly bool demo;
     string available;
     bool wantView, moved;
+    Rectangle movingFrom;
     int traySize, bigSize;
     bool trayLight;
     float scale = 1;
+    FormWindowState shownState = FormWindowState.Normal;
+    bool built;
 
-    [DllImport("user32.dll")] static extern bool ReleaseCapture();
-    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
     public MainWindow(FakeHidpp fake)
     {
         this.fake = fake;
         demo = fake != null;
         WindowHelpers.Round(this);
-        HandleCreated += (s, e) => { WindowHelpers.Border(this, Theme.Border); Presence.Watch(Handle); };
-        FormBorderStyle = FormBorderStyle.None;
+        HandleCreated += (s, e) => { StyleFrame(); Presence.Watch(Handle); };
         Text = "G-Lite";
         StartPosition = FormStartPosition.Manual;
         ClientSize = new Size(WindowWidth, WindowHeight);
         Ui.Style(this, () => BackColor = Theme.Background);
         Ui.Font(this, 9.75f, Ui.Regular);
         FormClosing += (s, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; ToTray(); } };
-        MouseDown += Drag;
 
         side = Ui.Add(this, new Control(), 0, 0, SidebarWidth, WindowHeight);
         Ui.Style(side, () => side.BackColor = Theme.Sidebar);
-        side.Paint += (s, e) =>
+        Ui.Add(side, new TitleLogo(), 10, 0, SidebarInnerWidth, 24).MouseDown += (s, e) =>
         {
-            using (var pen = new Pen(Theme.Border)) e.Graphics.DrawLine(pen, side.Width - 1, 0, side.Width - 1, side.Height);
+            if (e.Button == MouseButtons.Left && e.X < 60 * Ui.DpiScale) ToggleView();
         };
-        side.MouseDown += Drag;
-        Ui.Add(side, new TitleLogo(), 10, 12, SidebarInnerWidth, 34).MouseDown += (s, e) =>
-        {
-            if (e.Button != MouseButtons.Left) return;
-            var at = Location;
-            bool was = moved;
-            Drag(s, e);
-            if (Location != at) return;
-            moved = was;
-            if (e.X < 60 * Ui.DpiScale) ToggleView();
-        };
-        Ui.Text(side, "DEVICES", 18, 58, () => Theme.Dim, 8.25f, Ui.Semibold).MouseDown += Drag;
-        deviceList = Ui.Add(side, new DeviceList(), 0, 78, SidebarWidth - 1, 400);
-        deviceList.MouseDown += Drag;
-        noneText = Ui.Text(deviceList, "Looking…", 18, 4, () => Theme.Dim, 9f);
+        deviceList = Ui.Add(side, new DeviceList(), 0, ListTop, SidebarWidth - 1, 400);
+        noneText = Ui.Text(deviceList.Sheet, "Scanning devices…", 18, 4, () => Theme.Dim, 9f);
 
         int bottom = WindowHeight - 14 - 36;
         var quit = Ui.Add(side, new FlatButton { Style = ButtonStyle.Ghost, Icon = "power", Text = "Quit" },
             10, bottom, SidebarInnerWidth, 36);
+        quit.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         quit.Click += (s, e) => { HidePanel(); WaitAll(); Application.Exit(); };
         quit.TabIndex = 103;
         bottom -= 40;
         settingsButton = Ui.Add(side, new FlatButton { Style = ButtonStyle.Ghost, Icon = "gear", Text = "Settings" },
             10, bottom, SidebarInnerWidth, 36);
+        settingsButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         settingsButton.Click += (s, e) => ShowSettings();
         settingsButton.TabIndex = 102;
         bottom -= 40;
         logsButton = Ui.Add(side, new FlatButton { Style = ButtonStyle.Ghost, Icon = "lines", Text = "Logs" },
             10, bottom, SidebarInnerWidth, 36);
+        logsButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         logsButton.Click += (s, e) => ShowLogs();
         logsButton.TabIndex = 101;
         bottom -= 40;
         scanButton = Ui.Add(side, new FlatButton { Style = ButtonStyle.Ghost, Icon = "refresh", Text = "Scan for devices" },
             10, bottom, SidebarInnerWidth, 36);
+        scanButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         scanButton.Click += (s, e) => Rescan();
         scanButton.TabIndex = 100;
         if (demo)
@@ -124,12 +114,14 @@ class MainWindow : Form
             view = new KeyboardView(fake, KeyLayout.Load("g515-tkl.json"));
             var show = Ui.Add(side, new FlatButton { Style = ButtonStyle.Ghost, Icon = "keyboard", Text = "Show keyboard" },
                 10, bottom, SidebarInnerWidth, 36);
+            show.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             show.Click += (s, e) => { if (view.Visible) view.Hide(); else ShowView(); };
             view.VisibleChanged += (s, e) => { show.Text = view.Visible ? "Hide keyboard" : "Show keyboard"; wantView = view.Visible; };
         }
         updateButton = Ui.Add(side,
             new FlatButton { Style = ButtonStyle.Solid, Icon = "download", Text = "Update available", Visible = false },
             10, bottom - 40, SidebarInnerWidth, 36);
+        updateButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         updateButton.Click += (s, e) => { if (ready != null) Restart(); else ShowUpdatePage(false); };
         updateButton.TabIndex = 99;
         navTop = bottom;
@@ -139,10 +131,11 @@ class MainWindow : Form
         readyText.Size = new Size(SidebarInnerWidth - 8, 16);
         readyText.Cursor = Cursors.Hand;
         readyText.Visible = false;
+        readyText.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         readyText.Click += (s, e) => ShowUpdatePage(false);
         FitList();
 
-        empty = Ui.Add(this, new EmptyPage(Drag, Rescan), SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
+        empty = Ui.Add(this, new EmptyPage(Rescan), SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
         rescanSoon.Tick += (s, e) => { rescanSoon.Stop(); Rescan(); };
         sleepers.Tick += (s, e) => { if (Visible) Rescan(); };
         batteries.Tick += (s, e) => ReadBatteries();
@@ -150,13 +143,12 @@ class MainWindow : Form
 
         settingsPage = Ui.Add(this, new Control { Visible = false }, SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
         Ui.Style(settingsPage, () => settingsPage.BackColor = Theme.Background);
-        settingsPage.MouseDown += Drag;
         // The title stays while the rest scrolls.
         var settings = Ui.Add(settingsPage, new ScrollPanel(), 0, SettingsHeader, WindowWidth - SidebarWidth, WindowHeight - SettingsHeader);
+        settings.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         Ui.Style(settings, () => settings.BackColor = Theme.Background);
-        settings.MouseDown += Drag;
-        logsPage = Ui.Add(this, new LogsPage(Drag), SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
-        updatePage = Ui.Add(this, new UpdatePage(Drag), SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
+        logsPage = Ui.Add(this, new LogsPage(), SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
+        updatePage = Ui.Add(this, new UpdatePage(), SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
         if (demo) updatePage.Fetch = DemoChangelog;
         updatePage.BackClicked = ShowSettings;
         updatePage.CheckClicked = () => CheckUpdates(true);
@@ -170,76 +162,67 @@ class MainWindow : Form
             ShowUpdate(null);
             if (updatePage.FromSettings) ShowSettings(); else Pick(selected);
         };
-        Ui.Text(settingsPage, "Settings", 20, 14, () => Theme.Text, 13.5f, Ui.Semibold).MouseDown += Drag;
+        Ui.Text(settingsPage, "Settings", 20, 14, () => Theme.Text, 13.5f, Ui.Semibold);
 
-        Ui.Text(settings, "Appearance", 20, 12, () => Theme.Dim, 9f, Ui.Semibold);
-        var look = Ui.Add(settings, new RoundedBox(), 20, 34, 616, 64);
-        themeHint = Row(look, 0, "Theme", "");
+        const int rowHeight = Ui.RowHeight;
+        int sectionTop = 12;
+        var look = Rows.Section(settings.Sheet, "Appearance", ref sectionTop, new RoundedBox(), 2 * rowHeight);
+        themeHint = Rows.Row(look, 0, "Theme", "").Hint;
         themePicker = Ui.Add(look, new SegmentedPicker { Items = new[] { "System", "Dark", "Light" }, AccessibleName = "Theme" },
             616 - 14 - 240, 16, 240, 32);
         themePicker.Picked += i => { Theme.Mode = Theme.Modes[i]; ShowThemeHint(); };
+        accentHint = Rows.Row(look, rowHeight, "Accent color", "").Hint;
+        accentPicker = Ui.Add(look, new SegmentedPicker { Items = new[] { "G-Lite", "Windows", "Custom" }, AccessibleName = "Accent color" },
+            616 - 14 - 240, rowHeight + 16, 240, 32);
+        // Custom opens the colour dialog, again when it's already picked.
+        accentPicker.Picked += i => { if (i == 2) ChooseAccent(); else Theme.AccentMode = Theme.Accents[i]; ShowThemeHint(); };
 
-        Ui.Text(settings, "Updates", 20, 118, () => Theme.Dim, 9f, Ui.Semibold);
-        var updatesBox = Ui.Add(settings, new RoundedBox(), 20, 140, 616, 192);
-        Row(updatesBox, 0, "Check for updates", "Looks for a new release on GitHub when G-Lite starts");
+        var updatesBox = Rows.Section(settings.Sheet, "Updates", ref sectionTop, new RoundedBox(), 3 * rowHeight);
+        Rows.Row(updatesBox, 0, "Check for updates", "Looks for a new release on GitHub when G-Lite starts");
         checkToggle = Ui.Add(updatesBox, new Toggle { Checked = Updater.CheckForUpdates, AccessibleName = "Check for updates" },
             616 - 14 - 40, 21, 40, 22);
         checkToggle.Changed += () => Updater.CheckForUpdates = checkToggle.Checked;
-        Rule(updatesBox, 64);
-        Row(updatesBox, 64, "Install updates automatically", "Otherwise G-Lite asks first");
+        Rows.Row(updatesBox, rowHeight, "Install updates automatically", "Otherwise G-Lite asks first");
         autoToggle = Ui.Add(updatesBox, new Toggle { Checked = Updater.Auto, AccessibleName = "Install updates automatically" },
-            616 - 14 - 40, 64 + 21, 40, 22);
+            616 - 14 - 40, rowHeight + 21, 40, 22);
         autoToggle.Changed += () => Updater.Auto = autoToggle.Checked;
-        Rule(updatesBox, 128);
-        checkText = Row(updatesBox, 128, "Version " + Application.ProductVersion, "");
+        checkText = Rows.Row(updatesBox, 2 * rowHeight, "Version " + Application.ProductVersion, "").Hint;
         checkText.AutoSize = false;
         checkText.AutoEllipsis = true;
         checkText.Size = new Size(616 - 14 - 180 - 14 - 14, 18);
-        var checkNow = Ui.Add(updatesBox, new FlatButton { Text = "Check for updates" }, 616 - 14 - 180, 128 + 16, 180, 32);
+        var checkNow = Ui.Add(updatesBox, new FlatButton { Text = "Check for updates" }, 616 - 14 - 180, 2 * rowHeight + 16, 180, 32);
         checkNow.Click += (s, e) => { ShowUpdatePage(true); CheckUpdates(true); };
 
-        Ui.Text(settings, "Startup", 20, 352, () => Theme.Dim, 9f, Ui.Semibold);
-        var start = Ui.Add(settings, new RoundedBox(), 20, 374, 616, 64);
-        Row(start, 0, "Run on startup", "Starts in the tray when you sign in to Windows");
+        var start = Rows.Section(settings.Sheet, "Startup", ref sectionTop, new RoundedBox(), rowHeight);
+        Rows.Row(start, 0, "Run on startup", "Starts in the tray when you sign in to Windows");
         runToggle = Ui.Add(start, new Toggle { AccessibleName = "Run on startup" }, 616 - 14 - 40, 21, 40, 22);
         runToggle.Changed += () => SetStartup(runToggle.Checked);
 
-        Ui.Text(settings, "Services", 20, 456, () => Theme.Dim, 9f, Ui.Semibold);
-        var services = Ui.Add(settings, new ServicesBox(demo), 20, 478, 616, ServicesBox.DesignHeight);
-        settings.Fit(services.Bottom + 20);
+        Rows.Section(settings.Sheet, "Services", ref sectionTop, new ServicesBox(demo), ServicesBox.DesignHeight);
+        settings.Fit(sectionTop);
 
-        minimize = Ui.Add(this, new FlatButton { Style = ButtonStyle.Ghost, Icon = "minus", AccessibleName = "Minimize" },
-            WindowWidth - 12 - 72, 10, 36, 28);
-        minimize.Click += (s, e) => WindowState = FormWindowState.Minimized;
-        minimize.TabIndex = 1000;
-        close = Ui.Add(this, new FlatButton { Style = ButtonStyle.Ghost, Icon = "close", AccessibleName = "Close to tray" },
-            WindowWidth - 12 - 36, 10, 36, 28);
-        close.Click += (s, e) => ToTray();
-        close.TabIndex = 1001;
-
+        foreach (var page in new Control[] { empty, settingsPage, logsPage, updatePage }) Watch(page);
+        // The pages' top left corner is rounded into the sidebar and the title bar, which share a colour.
+        corner = Ui.Add(this, new Control(), SidebarWidth, 0, 8, 8);
+        corner.Paint += (s, e) =>
+        {
+            e.Graphics.Clear(Theme.Sidebar);
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var brush = new SolidBrush(Theme.Background)) e.Graphics.FillEllipse(brush, 0, 0, 2 * corner.Width, 2 * corner.Height);
+        };
         Theme.Changed += Restyle;
         ShowThemeHint();
         ShowUpdate(null);
+        built = true;
         Rescale(WindowHelpers.At(Point.Empty));
     }
 
-    static Label Row(Control box, int y, string title, string hint)
-    {
-        Ui.Text(box, title, 14, y + 12, () => Theme.Text, 9.75f, Ui.Semibold);
-        return Ui.Text(box, hint, 14, y + 33, () => Theme.Dim, 9f);
-    }
-
-    static void Rule(Control box, int y)
-    {
-        var line = Ui.Add(box, new Control(), 14, y, box.Width - 28, 1);
-        Ui.Style(line, () => line.BackColor = Theme.Border);
-    }
 
     void Restyle()
     {
         Ui.Restyle();
         foreach (var page in pages.Values.OfType<DevicePage>()) page.Restyle();
-        WindowHelpers.Border(this, Theme.Border);
+        StyleFrame();
         ShowThemeHint();
         Invalidate(true);
         if (Tray != null && Tray.ContextMenuStrip != null) Tray.ContextMenuStrip.BackColor = Theme.Card;
@@ -252,6 +235,22 @@ class MainWindow : Form
         themeHint.Text = mode == "system"
             ? "Follows Windows, which uses " + (Theme.SystemLight() ? "light" : "dark") + " mode right now"
             : "Always " + mode;
+        var accent = Theme.AccentMode;
+        accentPicker.Index = Array.IndexOf(Theme.Accents, accent);
+        accentHint.Text = accent == "windows" ? "Follows Windows' accent color" : accent == "custom" ? "Your color, in both themes" : "G-Lite's green";
+    }
+
+    // Cancelled, the accent stays as it was.
+    void ChooseAccent()
+    {
+        using (var dialog = new ColorDialog { FullOpen = true, Color = Theme.Accent })
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+            {
+                Theme.CustomAccent = dialog.Color.ToArgb() & 0xFFFFFF;
+                Theme.AccentMode = "custom";
+            }
+        Activate();
+        ShowThemeHint();
     }
 
     Control Current
@@ -307,6 +306,7 @@ class MainWindow : Form
 
     void ShowLogs()
     {
+        if (logsPage.Visible) return;
         foreach (var page in pages.Values) page.Visible = false;
         empty.Visible = false;
         settingsPage.Visible = false;
@@ -496,6 +496,7 @@ class MainWindow : Form
             {
                 page = MakePage(device, type);
                 Place(this, page, SidebarWidth, 0, WindowWidth - SidebarWidth, WindowHeight);
+                Watch(page);
                 page.Visible = false;
                 pages[device.Key] = page;
                 if (page is KeyboardPage && note != null) { ((KeyboardPage)page).Note = note; note = null; }
@@ -507,8 +508,7 @@ class MainWindow : Form
             if (!items.TryGetValue(device.Key, out item))
             {
                 var key = device.Key;
-                item = Place(deviceList, new DeviceListItem(), 10, y, SidebarInnerWidth, 46);
-                deviceList.Watch(item);
+                item = Place(deviceList.Sheet, new DeviceListItem(), 10, y, SidebarInnerWidth, 46);
                 item.Click += (s, e) => Pick(key);
                 items[key] = item;
             }
@@ -521,15 +521,14 @@ class MainWindow : Form
                 : device.Kind == "light" || device.Kind == "keyboard" || device.Kind == "mouse" || device.Kind == "headset" ? device.Kind
                 : "device";
             item.AccessibleName = device.ShortName;
-            item.Location = new Point(S(10), S(y) - deviceList.Offset);
+            item.Location = new Point(S(10), S(y));
             item.Invalidate();
             y += 50;
         }
         deviceList.Fit(S(Math.Max(0, y - 4)));
         noneText.Text = "None found";
         noneText.Visible = list.Count == 0;
-        minimize.BringToFront();
-        close.BringToFront();
+        corner.BringToFront();
         sleepers.Enabled = list.Any(device => device.Asleep && !Devices.Shorts.ContainsKey(device.Path ?? ""));
         if (!demo) Listen(list);
         if (!settingsPage.Visible && !logsPage.Visible && !updatePage.Visible) Pick(selected);
@@ -545,11 +544,11 @@ class MainWindow : Form
     Control MakePage(FoundDevice found, Type type)
     {
         var support = DeviceTable.For(found);
-        if (support == null || support.Screen != type) return new InfoPage(found, Drag, Rescan);
+        if (support == null || support.Screen != type) return new InfoPage(found, Rescan);
         Hidpp demoDevice = null;
         if (demo && !demoDevs.TryGetValue(found.Key, out demoDevice))
             demoDevs[found.Key] = demoDevice = support.Fake != null ? support.Fake(found) : fake;
-        return support.Make(found, demoDevice, Drag);
+        return support.Make(found, demoDevice);
     }
 
     void Remove(string key)
@@ -601,6 +600,25 @@ class MainWindow : Form
             new FoundDevice { Key = "demo|g413", Name = "G413 Silver Mechanical Gaming Keyboard", Kind = "keyboard",
                 Link = "USB", Index = 0xFF, Firmware = "U1 14.00, build 0008",
                 Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8070, 0x40A2 } },
+            new FoundDevice { Key = "demo|g213", Name = "Gaming Keyboard G213", Kind = "keyboard",
+                Link = "USB", Index = 0xFF, Firmware = "U1 12.01, build 0007",
+                Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8070 } },
+            new FoundDevice { Key = "demo|g513", Name = "G513 Carbon RGB Mechanical Gaming Keyboard", Kind = "keyboard",
+                Link = "USB", Index = 0xFF, Firmware = "U1 38.03, build 0015",
+                Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8080, 0x8070 } },
+            // Zone keyboards without a key picture yet.
+            new FoundDevice { Key = "demo|gprokeyboard", Name = "G PRO RGB Mechanical Gaming Keyboard", Kind = "keyboard",
+                Link = "USB", Index = 0xFF, Firmware = "U1 36.02, build 0011",
+                Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8080, 0x8070 } },
+            new FoundDevice { Key = "demo|g810", Name = "G810 Orion Spectrum", Kind = "keyboard",
+                Link = "USB", Index = 0xFF, Firmware = "U1 35.04, build 0012",
+                Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8080, 0x8070 } },
+            new FoundDevice { Key = "demo|g910", Name = "G910 Orion Spectrum", Kind = "keyboard",
+                Link = "USB", Index = 0xFF, Firmware = "U1 34.01, build 0009",
+                Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8080, 0x8070 } },
+            new FoundDevice { Key = "demo|g410", Name = "G410 Atlas Spectrum", Kind = "keyboard",
+                Link = "USB", Index = 0xFF, Firmware = "U1 33.00, build 0008",
+                Features = new[] { 0x0001, 0x0003, 0x4522, 0x0005, 0x4540, 0x8060, 0x8080, 0x8070 } },
             new FoundDevice { Key = "demo|g510", Name = "G510s Gaming Keyboard", Kind = "keyboard",
                 Link = "USB", Index = 0xFF, PlainHid = true, HasVendorCollection = true, Path = @"\\?\hid#vid_046d&pid_c22d&mi_01&col02" },
             new FoundDevice { Key = "demo|mouse", Name = "G Pro Wireless Gaming Mouse", Kind = "mouse",
@@ -660,23 +678,30 @@ class MainWindow : Form
             new FoundDevice { Key = "demo|headset", Name = "PRO X Wireless Gaming Headset", Kind = "headset",
                 Link = "LIGHTSPEED", Index = 0xFF, Battery = 71, BatteryFromVoltage = true, Millivolts = 3926,
                 Firmware = "U1 12.01, build 0203",
-                Features = new[] { 0x0001, 0x0003, 0x0005, 0x1F20, 0x8300 } },
+                Features = new[] { 0x0001, 0x0003, 0x0005, 0x8310, 0x8300, 0x1F20 } },
         };
     }
 
     int S(float value) { return (int)Math.Round(value * scale); }
 
-    void Rescale(float newScale)
+    bool Rescale(float newScale)
     {
-        if (newScale == scale) return;
+        if (newScale == scale) return false;
+        float ratio = newScale / scale;
+        var client = ClientSize;
         SuspendLayout();
-        Scale(new SizeF(newScale / scale, newScale / scale));
+        Scale(new SizeF(ratio, ratio));
         scale = newScale;
         Ui.DpiScale = newScale;
         Ui.Refont();
         ResumeLayout();
+        // WinForms sizes the frame at the system's DPI, so the client size is set from the frame the window has.
+        if (WindowState == FormWindowState.Normal)
+            Size += new Size((int)Math.Round(client.Width * ratio) - ClientSize.Width,
+                (int)Math.Round(client.Height * ratio) - ClientSize.Height);
         Invalidate(true);
         RefreshIcons();
+        return true;
     }
 
     public void RefreshIcons()
@@ -690,31 +715,72 @@ class MainWindow : Form
         if (bigPixels != bigSize) { bigSize = bigPixels; Icon = Logo.MakeIcon(bigPixels); }
     }
 
+    // A page keeps its width, centred right of the sidebar, and takes the window's height.
+    Rectangle PageBounds
+    {
+        get
+        {
+            int width = S(WindowWidth - SidebarWidth);
+            return new Rectangle(side.Width + (ClientSize.Width - side.Width - width) / 2, 0, width, ClientSize.Height);
+        }
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (!built || WindowState == FormWindowState.Minimized) return;
+        shownState = WindowState;
+        side.Height = ClientSize.Height;
+        FitList();
+        foreach (var page in pages.Values.Concat(new Control[] { empty, settingsPage, logsPage, updatePage }))
+            if (page.Visible) page.Bounds = PageBounds;
+    }
+
+    // Only the shown page follows the window's size; a hidden one is sized when it's shown.
+    void Watch(Control page)
+    {
+        page.VisibleChanged += (s, e) => { if (page.Visible) page.Bounds = PageBounds; };
+        page.Bounds = PageBounds;
+    }
+
+    // The title bar takes the sidebar's colour (Windows 11) or Windows' dark or light one (Windows 10).
+    void StyleFrame()
+    {
+        WindowHelpers.Border(this, Theme.Border);
+        WindowHelpers.TitleBar(this, Theme.Sidebar, Theme.Text, !Theme.Light);
+    }
+
     protected override void WndProc(ref Message message)
     {
-        if (message.Msg == WindowHelpers.DpiChanged) Rescale(WindowHelpers.FromMessage(message));
+        // Moved or resized by hand (between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE, which a click on the title bar sends too), so ShowPanel
+        // leaves the window where it is from then on.
+        if (message.Msg == 0x0231) movingFrom = Bounds;
+        if (message.Msg == 0x0232 && Bounds != movingFrom) moved = true;
+        if (message.Msg == 0x0024)
+        {
+            base.WndProc(ref message);
+            // The smallest window holds the layout at its scale, with the frame it has now. Minimized, the window has no client area
+            // to measure the frame from, so Windows' own limit stays.
+            if (ClientSize.Width > 0)
+            {
+                Marshal.WriteInt32(message.LParam, 24, S(WindowWidth) + Width - ClientSize.Width);
+                Marshal.WriteInt32(message.LParam, 28, S(WindowHeight) + Height - ClientSize.Height);
+            }
+            return;
+        }
+        // Windows' suggested bounds keep the client size scaled, with the frame at the new DPI.
+        if (message.Msg == WindowHelpers.DpiChanged && Rescale(WindowHelpers.FromMessage(message)) && WindowState == FormWindowState.Normal)
+            Bounds = Rectangle.FromLTRB(Marshal.ReadInt32(message.LParam, 0), Marshal.ReadInt32(message.LParam, 4),
+                Marshal.ReadInt32(message.LParam, 8), Marshal.ReadInt32(message.LParam, 12));
         Presence.Power(message);
         if (message.Msg == 0x0219 && !demo) RescanSoon();
         base.WndProc(ref message);
-    }
-
-    void Drag(object s, MouseEventArgs e)
-    {
-        if (e.Button != MouseButtons.Left) return;
-        ReleaseCapture();
-        SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero);
-        moved = true;
     }
 
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
         if (shown is KeyboardPage) ((KeyboardPage)shown).CheckKeyboard();
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        if (!WindowHelpers.Rounded) using (var pen = new Pen(Theme.Border)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
     }
 
     void SetStartup(bool on)
@@ -822,7 +888,7 @@ class MainWindow : Form
     void FitList()
     {
         int bottom = labelShown ? navTop - 40 - 24 : rowShown ? navTop - 40 - 8 : navTop - 8;
-        deviceList.Height = S(bottom - 78);
+        deviceList.Height = side.Height - S(WindowHeight - bottom + ListTop);
     }
 
     void Ready(string version)
@@ -949,13 +1015,13 @@ class MainWindow : Form
 
     public void ShowPanel()
     {
-        if (WindowState == FormWindowState.Minimized) { Show(); WindowState = FormWindowState.Normal; }
+        if (WindowState == FormWindowState.Minimized) { Show(); WindowState = shownState; }
         var workArea = Screen.FromPoint(Cursor.Position).WorkingArea;
         Rescale(WindowHelpers.At(moved ? Location : Cursor.Position));
-        if (!moved)
+        if (!moved && WindowState == FormWindowState.Normal)
             Location = new Point(Math.Max(workArea.Left, workArea.Right - Width - S(12)),
                 Math.Max(workArea.Top, workArea.Bottom - Height - S(12)));
-        Show();
+        WindowHelpers.ShowPainted(this);
         if (view != null && wantView) ShowView();
         Activate();
         Pick(selected);

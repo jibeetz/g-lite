@@ -622,13 +622,17 @@ final class FakeSpeaker: Hidpp {
 // A PRO X Wireless (app/Fake.cs, FakeHeadset): sidetone 30, auto-off after 30 min, 3926 mV.
 final class FakeHeadset: Hidpp {
     var sidetone = 30, autoOffMinutes = 30
+    // The PRO X's equalizer, from its report: ten bands from 32 Hz to 16 kHz, 12 dB up or down, stored as below.
+    var bands: [Int8] = [0, 0, 0, 0, 0, 1, 3, 5, 6, 6]
+    var persistence = -1
+    static let frequencies = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 
     init() { super.init(fake: 0xFF) }
 
     static func found() -> FoundDevice {
         let device = FoundDevice()
         device.key = "demo|headset"; device.name = "PRO X Wireless Gaming Headset"; device.kind = "headset"; device.link = "LIGHTSPEED"
-        device.battery = 71; device.features = [0x0001, 0x0003, 0x0005, 0x1F20, 0x8300]
+        device.battery = 71; device.features = [0x0001, 0x0003, 0x0005, 0x8310, 0x8300, 0x1F20]
         return device
     }
 
@@ -637,7 +641,19 @@ final class FakeHeadset: Hidpp {
         let padded = parameters + [UInt8](repeating: 0, count: 16)
         if featureIndex == 0 {
             let id = Int(padded[0]) << 8 | Int(padded[1])
-            reply[0] = id == 0x8300 ? 1 : id == 0x1F20 ? 2 : 0
+            reply[0] = id == 0x8300 ? 1 : id == 0x1F20 ? 2 : id == 0x8310 ? 3 : 0
+        } else if featureIndex == 3 {
+            if fn == 0 { reply[0] = UInt8(bands.count); reply[1] = 12; reply[2] = 1 }
+            if fn == 1 {
+                let start = Int(padded[0])
+                reply[0] = padded[0]
+                for i in 0..<7 where start + i < FakeHeadset.frequencies.count {
+                    reply[1 + 2 * i] = UInt8(FakeHeadset.frequencies[start + i] >> 8)
+                    reply[2 + 2 * i] = UInt8(FakeHeadset.frequencies[start + i] & 0xFF)
+                }
+            }
+            if fn == 2 { for i in bands.indices { reply[i] = UInt8(bitPattern: bands[i]) } }
+            if fn == 3 { persistence = Int(padded[0]); for i in bands.indices { bands[i] = Int8(bitPattern: padded[1 + i]) } }
         } else if featureIndex == 1 {
             if fn == 0 { reply[0] = UInt8(sidetone) }
             if fn == 1 { sidetone = Int(padded[0]) }
@@ -726,8 +742,15 @@ final class FakeLight: Hidpp {
 final class FakeG510: Hidpp {
     var features: [UInt8: [UInt8]] = [0x04: [0x04, 0x80], 0x05: [0x05, 0xFF, 0xFF, 0xFF], 0x06: [0x06, 0xFF, 0xFF, 0xFF], 0x07: [0x07, 0x03, 0x00]]
     var writes = 0
+    // Input report 0x03 (hid-lg-g15): the G keys, M keys and MR as bits, and the Game mode switch, byte 3 bit 2.
+    var gameMode = false
 
     init() { super.init(fake: 0xFF) }
+
+    override func readInput(_ id: UInt8) throws -> [UInt8] {
+        if id != 0x03 { throw GLiteError.io(String(format: "Couldn't read input report %02X", id)) }
+        return [0x03, 0x00, 0x00, gameMode ? 0x04 : 0x00, 0x00, 0x00, 0x00, 0x00]
+    }
 
     static func found() -> FoundDevice {
         let device = FoundDevice()

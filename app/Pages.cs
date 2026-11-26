@@ -31,6 +31,8 @@ abstract class DevicePage : Control, IPage
     readonly Dropdown profiles;
     readonly TextField nameField;
     readonly FlatButton updateButton, moreButton, undoButton, reportButton;
+    FlatButton headerBackupsButton;
+    readonly Label heading;
     readonly StatusLine status;
     readonly FlatButton actionButton;
     Action actDo;
@@ -43,19 +45,26 @@ abstract class DevicePage : Control, IPage
     protected Control FooterPicker;
     // Whether the screen shows FooterPicker: its Visible reads false while the window is hidden in the tray.
     protected bool FooterPickerShown;
+    // A screen laid out in rows (UseBody) puts its settings on Body.Sheet, below the header. Body is as tall as they are and the
+    // footer follows it; when they don't fit the window, Body scrolls and the footer stays at the bottom.
+    protected ScrollPanel Body;
+    readonly List<Control> footer = new List<Control>();
+    // Design units: Body starts under the preset row; the footer's status line sits 10 below Body, the footer 57 high in all.
+    protected const int BodyTop = 118;
+    const int FooterGap = 10, FooterHeight = 730 - 673;
 
-    protected DevicePage(FoundDevice device, Hidpp fake, MouseEventHandler drag, string title, string noun, string prefix)
+    protected DevicePage(FoundDevice device, Hidpp fake, string title, string noun, string prefix)
     {
         found = device;
         this.fake = fake;
         this.prefix = prefix;
+        Size = Ui.PageSize;
         Ui.Style(this, () => BackColor = Theme.Background);
-        MouseDown += drag;
-        Ui.Text(this, title, 20, 14, () => Theme.Text, 13.5f, Ui.Semibold).MouseDown += drag;
+        heading = Ui.Text(this, title, 20, 14, () => Theme.Text, 13.5f, Ui.Semibold);
+        heading.SizeChanged += (s, e) => PlaceHeaderButtons();
         subtitle = Ui.Add(this, new DeviceSubtitle(), 21, 42, 540, 20);
-        subtitle.MouseDown += drag;
         reportButton = Ui.Add(this, new FlatButton { Style = ButtonStyle.Ghost, Text = "Report", AccessibleName = "Report of the " + noun },
-            572 - 80, 10, 80, 28);
+            20, 10, 80, 28);
 
         Ui.Text(this, "G-Lite preset", 20, 79, () => Theme.Dim, 9.75f);
         profiles = Ui.Add(this, new Dropdown { AccessibleName = "G-Lite preset" }, 108, 72, 160, 32);
@@ -77,8 +86,6 @@ abstract class DevicePage : Control, IPage
         moreButton = Ui.Add(this, new FlatButton { Text = "…", AccessibleName = "More preset actions" }, 360, 72, 36, 32);
         moreButton.Click += (s, e) => { if (naming) EndName(); else PresetMenu(); };
 
-        var line = Ui.Add(this, new Control(), 0, 673, 656, 1);
-        Ui.Style(line, () => line.BackColor = Theme.Border);
         status = Ui.Add(this, new StatusLine(), 20, 683, 460, 36);
         undoButton = Ui.Add(this, new FlatButton { Text = "Revert", Enabled = false, AccessibleName = "Revert changes" }, 416, 685, 72, 32);
         undoButton.Click += (s, e) => Undo();
@@ -86,6 +93,7 @@ abstract class DevicePage : Control, IPage
         actionButton.TabIndex = 1000;
         actionButton.Click += (s, e) => { if (actDo != null) actDo(); };
         report = Ui.Add(this, new ReportView(noun, () => ReportView.TitleFor(found), Collect), 0, 72, 656, 658);
+        report.Anchor = Ui.Tall;
         report.Closed += () => { reportButton.On = false; reportButton.Invalidate(); reportButton.Focus(); };
         reportButton.Click += (s, e) =>
         {
@@ -104,9 +112,64 @@ abstract class DevicePage : Control, IPage
 
     protected FlatButton BackupsButton(string noun)
     {
-        reportButton.Left = 572 - 80 - 4 - 80;
-        return Ui.Add(this, new FlatButton { Style = ButtonStyle.Ghost, Text = "Backups", AccessibleName = "Backups of the " + noun },
-            572 - 80, 10, 80, 28);
+        headerBackupsButton = Ui.Add(this,
+            new FlatButton { Style = ButtonStyle.Ghost, Text = "Backups", AccessibleName = "Backups of the " + noun }, 104, 10, 80, 28);
+        PlaceHeaderButtons();
+        return headerBackupsButton;
+    }
+
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        PlaceHeaderButtons();
+        PlaceFooter();
+    }
+
+    // top: where Body starts, in design units, lower when the screen keeps something above it (the keyboard's picture).
+    protected ScrollPanel UseBody(int top = BodyTop)
+    {
+        Body = Ui.Add(this, new ScrollPanel(), 0, top, Ui.PageSize.Width, Ui.PageSize.Height - FooterHeight - top);
+        Ui.Style(Body, () => Body.BackColor = Theme.Background);
+        footer.AddRange(new Control[] { status, undoButton, actionButton });
+        return Body;
+    }
+
+    // A screen's own control in the footer row, like Save, made at the footer's design height (the status line at 683): it joins the
+    // footer where it is now.
+    protected void InFooter(Control control)
+    {
+        control.Top += status.Top - 683;
+        footer.Add(control);
+    }
+
+    // How tall the rows are, in design units.
+    protected void FitBody(int height)
+    {
+        Body.Fit(Scaled(height));
+        PlaceFooter();
+    }
+
+    // Design units in the page's pixels: the page is built at 100% and scaled as a whole once placed, at its width's ratio.
+    protected int Scaled(int units) { return (int)Math.Round(units * Width / (float)Ui.PageSize.Width); }
+
+    void PlaceFooter()
+    {
+        if (Body == null) return;
+        int bottom = Height - Scaled(FooterHeight);
+        Body.Height = Math.Max(0, Math.Min(Body.Content, bottom - Body.Top));
+        int top = Body.Bottom + Scaled(FooterGap);
+        int shift = top - status.Top;
+        if (shift != 0) foreach (var control in footer) control.Top += shift;
+    }
+
+    // Report and Backups follow the device's name, as far as the page's width lets them.
+    void PlaceHeaderButtons()
+    {
+        if (reportButton == null) return;
+        int gap = (int)Math.Round(4 * Ui.DpiScale);
+        int width = reportButton.Width + (headerBackupsButton != null ? gap + headerBackupsButton.Width : 0);
+        reportButton.Left = Math.Min(heading.Right + 3 * gap, Width - 5 * gap - width);
+        if (headerBackupsButton != null) headerBackupsButton.Left = reportButton.Right + gap;
     }
 
     public static string When(Backups.Entry entry)
@@ -587,26 +650,36 @@ abstract class DevicePage : Control, IPage
 class ColorRow
 {
     public static readonly int[] Swatches = { 0xFFFFFF, 0xFF2020, 0xFF8000, 0xFFD000, 0x30D050, 0x3080FF };
+    // A swatch's size, and the row's width once a custom colour is kept (the swatches, yours and +), 36 apart.
+    public const int Size = 34;
+    public static readonly int Widest = (Swatches.Length + 2) * 36 - 2;
     readonly Swatch[] swatches = new Swatch[Swatches.Length];
     readonly Swatch custom, more;
     readonly Control parent;
+    // In a row of Settings' layout, + stays at the right edge and the swatches move instead.
+    readonly bool rightAligned;
     int lastCustom = -1, color;
     public event Action<int> Picked;
 
-    public ColorRow(Control parent, int y)
+    public ColorRow(Control parent, int y) : this(parent, 10, y, false) { }
+
+    // x is where the row starts at its widest; a right-aligned row ends at x + Widest.
+    public ColorRow(Control parent, int x, int y, bool alignRight)
     {
         this.parent = parent;
+        rightAligned = alignRight;
         for (int i = 0; i < Swatches.Length; i++)
         {
             int color = Swatches[i];
             swatches[i] = Ui.Add(parent,
                 new Swatch { Fill = Color.FromArgb(color | unchecked((int)0xFF000000)), AccessibleName = "Color " + color.ToString("X6") },
-                10 + i * 36, y, 34, 34);
+                x + i * 36, y, Size, Size);
             swatches[i].Click += (s, e) => Pick(color);
         }
-        custom = Ui.Add(parent, new Swatch { AccessibleName = "Your color" }, 10 + Swatches.Length * 36, y, 34, 34);
+        custom = Ui.Add(parent, new Swatch { AccessibleName = "Your color" }, x + Swatches.Length * 36, y, Size, Size);
         custom.Click += (s, e) => { if (lastCustom >= 0) Pick(lastCustom); };
-        more = Ui.Add(parent, new Swatch { AccessibleName = "Pick a color" }, 10 + Swatches.Length * 36, y, 34, 34);
+        more = Ui.Add(parent, new Swatch { AccessibleName = "Pick a color" }, x + (Swatches.Length + (alignRight ? 1 : 0)) * 36, y,
+            Size, Size);
         more.Click += (s, e) => Choose();
     }
 
@@ -632,12 +705,18 @@ class ColorRow
             swatches[i].On = on && Swatches[i] == newColor;
             swatches[i].Invalidate();
         }
-        custom.Visible = lastCustom >= 0;
+        // Kept in a local: Visible reads false while the page is hidden.
+        bool customShown = lastCustom >= 0;
+        custom.Visible = customShown;
         custom.Fill = Color.FromArgb(lastCustom | unchecked((int)0xFF000000));
         custom.Enabled = on && editable;
         custom.On = on && isCustom;
         custom.Invalidate();
-        more.Left = custom.Left + (custom.Visible ? (int)Math.Round(36 * Ui.DpiScale) : 0);
+        // From the swatch's own size, as the page may not be scaled yet (RefreshControls from a constructor), where Ui.DpiScale already is.
+        int step = (int)Math.Round(custom.Width * 36f / Size);
+        if (rightAligned)
+            for (int i = 0; i < swatches.Length; i++) swatches[i].Left = custom.Left - (swatches.Length - i - (customShown ? 0 : 1)) * step;
+        else more.Left = custom.Left + (customShown ? step : 0);
         more.Enabled = on && editable;
     }
 
@@ -656,14 +735,13 @@ class InfoPage : Control
 
     string MediaKey { get { return "fnswap." + found.SettingsKey; } }
 
-    public InfoPage(FoundDevice device, MouseEventHandler drag, Action rescan)
+    public InfoPage(FoundDevice device, Action rescan)
     {
+        Size = Ui.PageSize;
         Ui.Style(this, () => BackColor = Theme.Background);
-        MouseDown += drag;
         title = Ui.Text(this, "", 20, 14, () => Theme.Text, 13.5f, Ui.Semibold);
-        title.MouseDown += drag;
+        title.SizeChanged += (s, e) => PlaceReportButton();
         subtitle = Ui.Add(this, new DeviceSubtitle(), 21, 42, 540, 20);
-        subtitle.MouseDown += drag;
 
         var state = Ui.Add(this, new RoundedBox(), 20, 80, 616, 104);
         head = Ui.Text(state, "", 14, 12, () => Theme.Dim, 9f, Ui.Semibold);
@@ -688,8 +766,9 @@ class InfoPage : Control
         features.AutoSize = false;
         features.Size = new Size(470, 60);
         reportButton = Ui.Add(this, new FlatButton { Style = ButtonStyle.Ghost, Text = "Report", AccessibleName = "Report of this device" },
-            536 - 4 - 80, 10, 80, 28);
+            20, 10, 80, 28);
         report = Ui.Add(this, new ReportView("device", () => ReportView.TitleFor(found), Collect), 0, 72, 656, 658);
+        report.Anchor = Ui.Tall;
         report.Closed += () => { reportButton.On = false; reportButton.Invalidate(); reportButton.Focus(); };
         reportButton.Click += (s, e) => { if (report.Visible) report.Close(); else Open(); };
         create.Click += (s, e) => Open();
@@ -743,6 +822,19 @@ class InfoPage : Control
         return Ui.Text(box, "", 120, y, () => Theme.Text, 9.75f);
     }
 
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        PlaceReportButton();
+    }
+
+    // Report follows the device's name, as far as the page's width lets it.
+    void PlaceReportButton()
+    {
+        if (reportButton == null) return;
+        reportButton.Left = Math.Min(title.Right + (int)Math.Round(12 * Ui.DpiScale), Width - (int)Math.Round(20 * Ui.DpiScale) - reportButton.Width);
+    }
+
     public void SetFound(FoundDevice device)
     {
         found = device;
@@ -780,14 +872,12 @@ class EmptyPage : Control
     readonly Label title, text, tips;
     readonly FlatButton scan, report;
 
-    public EmptyPage(MouseEventHandler drag, Action rescan)
+    public EmptyPage(Action rescan)
     {
+        Size = Ui.PageSize;
         Ui.Style(this, () => BackColor = Theme.Background);
-        MouseDown += drag;
         title = Centered(Ui.Text(this, "", 0, 150, () => Theme.Text, 15f, Ui.Semibold), 36);
-        title.MouseDown += drag;
         text = Centered(Ui.Text(this, "", 0, 192, () => Theme.Dim, 9.75f), 44);
-        text.MouseDown += drag;
         scan = Ui.Add(this, new FlatButton { Style = ButtonStyle.Primary, Text = "Scan again" }, 328 - 8 - 150, 252, 150, 32);
         scan.Click += (s, e) => rescan();
         report = Ui.Add(this, new FlatButton { Text = "Report your device" }, 328 + 8, 252, 150, 32);
@@ -795,7 +885,6 @@ class EmptyPage : Control
         tips = Centered(Ui.Text(this,
             "Turn the device on and wake it with a key press or a click.\nQuit G HUB, which can hold on to the device.\nPair Bluetooth devices in Windows first.",
             0, 320, () => Theme.Dim, 9f), 64);
-        tips.MouseDown += drag;
         Searching(true);
     }
 
