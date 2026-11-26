@@ -10,8 +10,8 @@ The code is in `mac/`; how it's organised, file by file, is in the Mac section o
   Windows, so a `settings.txt` or a preset written by one reads on the other.
 - `mac/build.sh` builds a universal `G-Lite.app` (arm64 and x86_64, macOS 12 and up), runs `GLite --selftest` first and stops if it
   fails, signs the app, then quits the running copy and installs it in `/Applications` (or `~/Applications`).
-- Every device family Windows supports has its screen, with Windows' features up to 0.1.0-beta. Its new rows layout isn't ported
-  (see [Known differences](#known-differences-from-windows)).
+- Every device family Windows supports has its screen, with Windows' features up to 0.1.0-beta. Its new rows layout is being ported
+  screen by screen (see [Known differences](#known-differences-from-windows)).
 - Almost everything is tested only on fake devices (`--demo`, the self-test). See [Tested on real devices](#tested-on-real-devices).
 
 ## Building and running
@@ -83,6 +83,8 @@ size (868 x 730).
     and the G560; mice drawn in their shapes (PRO family, DEX, G502); the Litra's bar centred; an added Screen area makes equal strips;
     the G300's Save refuses when the mouse changed profile and keeps a level's DPI it can't take; after a mouse Restore, `01` follows
     unless `02` was refused; the G560's Screen effect can be turned off before the speakers answer; the demo's six new keyboards.
+20. **Rows layout** (`Rows.swift`, from `app/Rows.cs`): the headset screen first, with its picture above the rows and the equalizer
+    a row per band; the other screens to follow one by one.
 
 ## Tested on real devices
 
@@ -120,10 +122,10 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 ### Known differences from Windows
 
-- Windows 0.1.0-beta lays out every screen in rows (a setting per row under section titles, the picture at the top), has a resizable
-  window and an accent colour. The Mac keeps its boxes and fixed window; the features are the same.
+- Windows 0.1.0-beta lays out every screen in rows (a setting per row under section titles, the picture at the top). On the Mac only
+  the headset screen is in rows so far (`Rows.swift`); the others keep their boxes. Windows' resizable window and accent colour
+  aren't planned: macOS has its own accent colour, and the rows scroll.
 - The MX Keys S's own support is being added on Windows (not in 0.1.0-beta); it comes to the Mac at the next sync.
-- The headset's equalizer is a row of vertical sliders, where Windows has a row per band: ten rows don't fit the Mac's page.
 - The click on Windows' G-Lite title opens the games, not the demo; the demo is `--demo` only on Windows, and Demo Mode in the menus on
   the Mac.
 - The slot in use (M1-M3) is checked on load and on the keyboard's events; Windows also checks it when the window comes to the front,
@@ -131,7 +133,6 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 - A click on a zone keyboard's picture doesn't pick its zone (Windows' does); the G560's picture does.
 - Picking an effect for one zone of a G512, G513, G PRO, G410, G810 or G910 while a per-key effect runs on All: the per-key effect sets every zone to Off again
   every 2 s, which overrides that zone (not checked against Windows).
-- The headset screen has no headset picture (Windows draws one above its rows).
 - A device with 0x40A0 and a coarse battery (the K295) gets the other devices' screen instead of Windows' info page with its media keys.
 - When idle is hidden while a live effect runs, since a live effect isn't saved.
 

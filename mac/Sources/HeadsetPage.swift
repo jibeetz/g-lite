@@ -1,11 +1,10 @@
 import AppKit
 import AVFoundation
 
-// The headset screen (app/HeadsetPage.cs): sidetone, auto-off and the equalizer (experimental), applied at once; the battery from
-// its voltage. The equalizer's bands are vertical sliders side by side, where Windows has a row each: ten rows don't fit the page.
-// Test sidetone opens the headset's microphone for 30 s (the dongle plays sidetone only while an app uses it), after the
-// microphone permission.
-// shortcut: no headset picture.
+// The headset screen (app/HeadsetPage.cs), in rows: the headset's picture, then Sound (Sidetone, Test sidetone), Power (Turn off
+// after) and the equalizer (experimental, a row per band), applied at once; rows the headset doesn't have are left out once it's read.
+// The battery shows under the name. Test sidetone opens the headset's microphone for 30 s (the dongle plays sidetone only while an
+// app uses it), after the microphone permission.
 final class HeadsetPage: DevicePage {
     private var current = HeadsetSettings(), sent = HeadsetSettings()
     private var state: HeadsetProtocol.State?
@@ -15,22 +14,16 @@ final class HeadsetPage: DevicePage {
 
     private let sidetone = Ui.slider(), sideValue = Ui.value()
     private let off = NSPopUpButton()
-    private let battery = Ui.secondary(""), firmware = Ui.secondary("")
-    private var sideHead = NSTextField(), offHead = Ui.secondary("Turn off after")
-    private let testButton = NSButton(title: "Test sidetone", target: nil, action: nil)
+    private let testButton = NSButton(title: "Test", target: nil, action: nil)
+    private var sideRow: RowView!, testRow: RowView!, offRow: RowView!
+    private var power = NSView()
     private var microphone: MicrophoneCapture?, testTimer: Timer?
     private static let maxBands = 15
-    private let bandSliders: [NSSlider] = (0..<maxBands).map { _ in
-        let slider = NSSlider(value: 0, minValue: -12, maxValue: 12, target: nil, action: nil)
-        slider.isVertical = true
-        slider.isContinuous = true
-        return slider
-    }
+    private let bandSliders: [NSSlider] = (0..<maxBands).map { _ in Ui.slider() }
     private let bandValues: [NSTextField] = (0..<maxBands).map { _ in Ui.value() }
-    private let bandNames: [NSTextField] = (0..<maxBands).map { _ in Ui.value() }
-    private var bandColumns: [NSView] = []
+    private var bandRows: [RowView] = []
     private let flatButton = NSButton(title: "Flat", target: nil, action: nil)
-    private var equalizerBox = NSView()
+    private var equalizer = NSView()
     // A band being dragged writes RAM only; once let go, RAM and EEPROM (persistence 1). keptBands: the last written to both.
     private var bandHeld = false
     private var keptBands: [Int]?
@@ -38,36 +31,37 @@ final class HeadsetPage: DevicePage {
     override func loadView() {
         sidetone.target = self; sidetone.action = #selector(sidetoneMoved)
         off.target = self; off.action = #selector(offPicked)
-        off.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        let (sideRow, head) = Ui.sliderRow("Sidetone", sidetone, sideValue)
-        sideHead = head
+        off.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true
         testButton.target = self; testButton.action = #selector(testClicked)
-        let sound = Ui.column([sideRow, Ui.hint("How much of your own voice you hear while you talk. It works while an app is using the "
-                                                + "microphone, like a call or a voice chat."), testButton])
-        let power = Ui.column([Ui.column([offHead, off], spacing: 4), Ui.column([Ui.secondary("Battery"), battery], spacing: 4),
-                               Ui.column([Ui.secondary("Firmware"), firmware], spacing: 4)])
+        testButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        sideRow = Rows.row("Sidetone", "Your own voice, while an app uses the microphone", Rows.slider(sidetone, sideValue))
+        testRow = Rows.row("Test sidetone", "Hear yourself for 30 s", testButton)
+        offRow = Rows.row("Turn off after", "When the headset isn't used", off)
         for (i, slider) in bandSliders.enumerated() {
             slider.tag = i
             slider.target = self; slider.action = #selector(bandMoved(_:))
-            slider.heightAnchor.constraint(equalToConstant: 110).isActive = true
-            let column = NSStackView(views: [bandValues[i], slider, bandNames[i]])
-            column.orientation = .vertical
-            column.spacing = 4
-            column.widthAnchor.constraint(equalToConstant: 44).isActive = true
-            for label in [bandValues[i], bandNames[i]] { label.alignment = .center }
-            bandColumns.append(column)
+            bandRows.append(Rows.row("", "", Rows.slider(slider, bandValues[i])))
         }
-        let bands = NSStackView(views: bandColumns)
-        bands.spacing = 0
         flatButton.target = self; flatButton.action = #selector(flatClicked)
-        equalizerBox = Ui.box("Equalizer", Ui.column([
-            Ui.hint("Experimental. The headset stores these bands, but it hasn't been heard to play them yet: G HUB applies its equalizer "
-                    + "on the PC. Changes are sent to the headset right away."), bands, flatButton]))
-        equalizerBox.isHidden = true
-        view = Ui.page(header: header, body: [Ui.box("Sound", sound), Ui.box("Power", power), equalizerBox], status: status, buttons: [])
+        flatButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        power = Rows.section("Power", [offRow])
+        equalizer = Rows.section("Equalizer", [Rows.note("Experimental. The headset stores these bands, but it hasn't been heard to play them "
+                                                         + "yet: G HUB applies its equalizer on the PC. Changes are sent to the headset right away.")]
+                                 + bandRows + [Rows.row("Flat", "Every band back to 0 dB", flatButton)])
+        let picture = HeadsetPicture()
+        view = Rows.page(header: header, sticky: picture, sections: [Rows.section("Sound", [sideRow, testRow]), power, equalizer],
+                         status: status, buttons: [])
         header.show(device)
         refresh()
         load()
+    }
+
+    // For --snapshot: the equalizer's last rows in view.
+    func showEqualizer() {
+        view.layoutSubtreeIfNeeded()
+        guard let scroll = equalizer.enclosingScrollView, let document = scroll.documentView else { return }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.frame.height - scroll.contentView.bounds.height)))
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     // ---- Test sidetone ----
@@ -94,7 +88,7 @@ final class HeadsetPage: DevicePage {
         do { microphone = try MicrophoneCapture(input) } catch { status.show("\(error)", error: true); return }
         logAction("Test sidetone")
         testTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in self?.stopTest() }
-        testButton.title = "Stop the test"
+        testButton.title = "Stop"
         testButton.keyEquivalent = "\r"
         status.show("Talk now. You hear yourself at the sidetone level. The test stops after 30 s.")
     }
@@ -104,7 +98,7 @@ final class HeadsetPage: DevicePage {
         testTimer = nil
         microphone?.stop()
         microphone = nil
-        testButton.title = "Test sidetone"
+        testButton.title = "Test"
         testButton.keyEquivalent = ""
         status.show(state == nil ? "" : dirty ? "Applied to the headset" : "Matches the headset")
     }
@@ -228,11 +222,16 @@ final class HeadsetPage: DevicePage {
     private func refresh() {
         refreshing = true
         defer { refreshing = false }
-        let hasSide = state?.hasSidetone == true, hasOff = state?.hasOff == true
-        Ui.dim(sideHead, !hasSide)
+        let ready = state != nil, hasSide = state?.hasSidetone == true, hasOff = state?.hasOff == true
+        // Before the headset is read every row shows but the equalizer's, whose bands it says.
+        sideRow.isHidden = ready && !hasSide
+        testRow.isHidden = ready && !hasSide
+        power.isHidden = ready && !hasOff
+        sideRow.enable(hasSide)
+        testRow.enable(hasSide)
         sidetone.isEnabled = hasSide
         testButton.isEnabled = hasSide
-        sidetone.integerValue = current.sidetone
+        sidetone.integerValue = hasSide ? current.sidetone : 0
         sideValue.stringValue = hasSide ? "\(current.sidetone)%" : ""
         offChoices = current.autoOffMinutes >= 0 && !HeadsetProtocol.offMinutes.contains(current.autoOffMinutes)
             ? (HeadsetProtocol.offMinutes + [current.autoOffMinutes]).sorted() : HeadsetProtocol.offMinutes
@@ -240,27 +239,74 @@ final class HeadsetPage: DevicePage {
         off.addItems(withTitles: offChoices.map { $0 == 0 ? "Never" : "\($0) min" })
         off.selectItem(at: hasOff ? offChoices.firstIndex(of: current.autoOffMinutes) ?? -1 : -1)
         off.isEnabled = hasOff
-        Ui.dim(offHead, !hasOff)
+        offRow.enable(hasOff)
         let frequencies = state?.frequencies ?? [], range = state?.range ?? 12
         let bandCount = current.bands == nil ? 0 : min(HeadsetPage.maxBands, frequencies.count)
-        equalizerBox.isHidden = bandCount == 0
+        equalizer.isHidden = bandCount == 0
         for i in 0..<HeadsetPage.maxBands {
-            bandColumns[i].isHidden = i >= bandCount
+            bandRows[i].isHidden = i >= bandCount
             guard i < bandCount, let band = current.bands?[i] else { continue }
             let hertz = frequencies[i]
-            bandNames[i].stringValue = hertz >= 1000 ? String(format: "%g", Double(hertz) / 1000) + "k" : "\(hertz)"
-            bandNames[i].toolTip = HeadsetPage.rangeText(hertz)
+            let name = hertz >= 1000 ? String(format: "%g kHz", Double(hertz) / 1000) : "\(hertz) Hz"
+            bandRows[i].title.stringValue = name
+            bandRows[i].hint.stringValue = HeadsetPage.rangeText(hertz)
             bandSliders[i].minValue = Double(-range); bandSliders[i].maxValue = Double(range)
             bandSliders[i].integerValue = band
-            bandSliders[i].setAccessibilityLabel(hertz >= 1000 ? String(format: "%g kHz", Double(hertz) / 1000) : "\(hertz) Hz")
+            bandSliders[i].setAccessibilityLabel(name)
             bandValues[i].stringValue = (band > 0 ? "+" : "") + "\(band) dB"
         }
         flatButton.isEnabled = current.bands?.contains { $0 != 0 } == true
-        firmware.stringValue = device.firmware.isEmpty ? "–" : device.firmware
-        let millivolts = state.map { $0.millivolts > 0 ? $0.millivolts : device.millivolts } ?? device.millivolts
-        let charging = state?.charging == true
-        let percent = !charging ? (millivolts > 0 ? FoundDevice.fromVolts(millivolts) : device.battery)
-            : device.battery >= 0 ? device.battery : FoundDevice.fromChargingVolts(millivolts)
-        battery.stringValue = percent < 0 ? "–" : "\(percent)%" + (millivolts > 0 ? ", \(millivolts) mV" : "") + (charging ? ", charging" : "")
+    }
+}
+
+// The headset, centred (app/HeadsetPage.cs, HeadsetPicture): the band, the cups, the microphone's boom with its light.
+final class HeadsetPicture: NSView {
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: .zero)
+        heightAnchor.constraint(equalToConstant: 150).isActive = true
+        setAccessibilityRole(.image)
+        setAccessibilityLabel("Headset")
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let height = bounds.height - 16, width = height * 0.9, y: CGFloat = 8, x = (bounds.width - width) / 2
+        let cupWidth = width * 0.26, cupHeight = height * 0.42, cupY = y + height * 0.5
+        KeyPicture.keyOff.setStroke()
+        // The band: the top half of an ellipse from cup to cup.
+        let bandRect = CGRect(x: x + cupWidth / 2, y: y + 4, width: width - cupWidth, height: height * 1.05)
+        let band = NSBezierPath()
+        band.appendArc(withCenter: CGPoint(x: bandRect.midX, y: bandRect.midY), radius: 1, startAngle: 180, endAngle: 360, clockwise: false)
+        band.transform(using: {
+            var transform = AffineTransform(translationByX: bandRect.midX, byY: bandRect.midY)
+            transform.scale(x: bandRect.width / 2, y: bandRect.height / 2)
+            transform.translate(x: -bandRect.midX, y: -bandRect.midY)
+            return transform
+        }())
+        band.lineWidth = 9
+        band.lineCapStyle = .round
+        band.stroke()
+        let boom = NSBezierPath()
+        boom.move(to: CGPoint(x: x + cupWidth * 0.6, y: cupY + cupHeight * 0.8))
+        boom.curve(to: CGPoint(x: x + width * 0.4, y: y + height * 0.96), controlPoint1: CGPoint(x: x + cupWidth * 0.4, y: y + height * 1.02),
+                   controlPoint2: CGPoint(x: x + width * 0.28, y: y + height * 0.98))
+        boom.lineWidth = 5
+        boom.lineCapStyle = .round
+        boom.stroke()
+        for cupX in [x, x + width - cupWidth] {
+            let cup = NSBezierPath(roundedRect: CGRect(x: cupX, y: cupY, width: cupWidth, height: cupHeight), xRadius: cupWidth * 0.42, yRadius: cupWidth * 0.42)
+            KeyPicture.keyOff.setFill()
+            cup.fill()
+            NSColor.separatorColor.setStroke()
+            cup.stroke()
+            KeyPicture.background.setFill()
+            NSBezierPath(roundedRect: CGRect(x: cupX + cupWidth * 0.22, y: cupY + cupHeight * 0.16, width: cupWidth * 0.56, height: cupHeight * 0.68),
+                         xRadius: cupWidth * 0.26, yRadius: cupWidth * 0.26).fill()
+        }
+        NSColor.controlAccentColor.setFill()
+        NSBezierPath(ovalIn: CGRect(x: x + width * 0.4 - 4, y: y + height * 0.96 - 4, width: 8, height: 8)).fill()
     }
 }
