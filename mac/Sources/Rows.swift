@@ -52,6 +52,15 @@ enum Rows {
         return holder
     }
 
+    // Pictures that take turns in the sticky place (the key picture, the Game view's), each the full width.
+    static func sticky(_ views: [NSView]) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.spacing = 0
+        for view in views { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        return stack
+    }
+
     // The page: header, then the sticky picture (if any), then the sections, which scroll; the status line and buttons at the
     // bottom, under a line.
     static func page(header: NSView, sticky: NSView?, sections: [NSView], status: NSView?, buttons: [NSView]) -> NSView {
@@ -95,7 +104,7 @@ enum Rows {
         for button in buttons { button.setContentHuggingPriority(.required, for: .horizontal) }
 
         let page = NSView()
-        for view in [top, scroll, line, footer] { view.translatesAutoresizingMaskIntoConstraints = false; page.addSubview(view) }
+        for view in [top, scroll] { view.translatesAutoresizingMaskIntoConstraints = false; page.addSubview(view) }
         NSLayoutConstraint.activate([
             top.topAnchor.constraint(equalTo: page.safeAreaLayoutGuide.topAnchor, constant: 16),
             top.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 24),
@@ -103,6 +112,14 @@ enum Rows {
             scroll.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 18),
             scroll.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+        ])
+        // Without a status line or buttons (Settings), no footer.
+        if status == nil && buttons.isEmpty {
+            scroll.bottomAnchor.constraint(equalTo: page.bottomAnchor).isActive = true
+            return page
+        }
+        for view in [line, footer] { view.translatesAutoresizingMaskIntoConstraints = false; page.addSubview(view) }
+        NSLayoutConstraint.activate([
             scroll.bottomAnchor.constraint(equalTo: line.topAnchor),
             line.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             line.trailingAnchor.constraint(equalTo: page.trailingAnchor),
@@ -122,10 +139,10 @@ final class FlippedView: NSView {
 
 // A section's rows in a rounded box, a rule above each shown row but the first.
 final class SectionBox: NSBox {
-    private let stack: NSStackView
+    private let stack: RowStack
 
     init(_ rows: [NSView]) {
-        stack = NSStackView(views: rows)
+        stack = RowStack(views: rows)
         super.init(frame: .zero)
         boxType = .custom
         titlePosition = .noTitle
@@ -155,11 +172,14 @@ final class SectionBox: NSBox {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+}
 
+// The rows' stack: each layout (a row shown or hidden) sets which rows get a rule.
+final class RowStack: NSStackView {
     override func layout() {
         super.layout()
         var first = true
-        for view in stack.arrangedSubviews where !view.isHidden {
+        for view in arrangedSubviews where !view.isHidden {
             (view as? RowView)?.ruled = !first
             first = false
         }
@@ -204,6 +224,12 @@ final class RowView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // An empty hint takes no line, so the title is centred (the G keys' rows).
+    override func layout() {
+        hint.isHidden = hint.stringValue.isEmpty
+        super.layout()
+    }
 
     // A row whose setting doesn't apply now is greyed, both lines.
     func enable(_ on: Bool) {

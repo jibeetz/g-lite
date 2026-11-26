@@ -630,22 +630,21 @@ final class EmptyPage: NSViewController {
 extension InfoPage { @objc fileprivate func scanAgain() { rescan() } }
 
 final class SettingsPage: NSViewController {
-    private let runAtLogin = NSButton(checkboxWithTitle: "Run G-Lite when I log in", target: nil, action: nil)
+    private let runAtLogin = Ui.toggle()
 
     override func loadView() {
         runAtLogin.target = self
         runAtLogin.action = #selector(toggleLogin)
         runAtLogin.state = LoginItem.on ? .on : .off
-        let startup = NSStackView(views: [runAtLogin, Ui.secondary("It starts in the menu bar, without opening its window.")])
-        startup.orientation = .vertical
-        startup.alignment = .leading
-        let folder = NSButton(title: "Show settings folder", target: self, action: #selector(showFolder))
-        let version = Ui.secondary("G-Lite \(App.version) for Mac. Settings, the log and backups are in "
-            + Settings.folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") + ".")
-        let about = NSStackView(views: [version, folder])
-        about.orientation = .vertical
-        about.alignment = .leading
-        view = Ui.page(header: PageHeader("Settings"), body: [Ui.box("Startup", startup), Ui.box("About", about)], status: nil, buttons: [])
+        let folder = NSButton(title: "Show", target: self, action: #selector(showFolder))
+        folder.setAccessibilityLabel("Show the settings folder")
+        folder.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        let place = Settings.folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        view = Rows.page(header: PageHeader("Settings"), sticky: nil, sections: [
+            Rows.section("Startup", [Rows.row("Run at login", "Starts in the menu bar when you log in, without its window", runAtLogin)]),
+            Rows.section("About", [Rows.row("Version \(App.version)", "G-Lite for Mac", NSView()),
+                                   Rows.row("Settings folder", "Settings, the log and backups, in " + place, folder)]),
+        ], status: nil, buttons: [])
     }
 
     @objc private func toggleLogin() {

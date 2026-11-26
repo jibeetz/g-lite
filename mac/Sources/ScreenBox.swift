@@ -1,9 +1,11 @@
 import AppKit
 
-// The Screen effect's box (app/KeyboardPage.cs, ZonesPage.cs and LightPage.cs: the Screen areas and settings boxes): the screen with
-// its areas, which a click picks, a drag moves and a drag at a corner resizes, then the monitor, intensity, update rate, smoothing,
-// pause and, on the speakers, brightness. changed gets each edit; the page keeps the setup as screen.<device>.
-final class ScreenBox: NSStackView {
+// The Screen effect's rows (app/KeyboardPage.cs, ZonesPage.cs and LightPage.cs, in rows since 0.1.0-beta): Zones (the screen with its
+// areas, which a click picks, a drag moves and a drag at a corner resizes), Monitor, Color boost, Update rate, Smooth changes and, on
+// the speakers, Brightness; the page puts them after Effect while the effect runs (show). The pause rows (Pause when screen off or
+// locked, and on a wireless keyboard Pause on low battery) go at the end of the page's section. changed gets each edit; the page keeps
+// the setup as screen.<device>.
+final class ScreenBox: NSObject {
     private let preview = ScreenPreview()
     private let monitorPopup = NSPopUpButton()
     private let addButton = NSButton(title: "Add area", target: nil, action: nil)
@@ -19,25 +21,23 @@ final class ScreenBox: NSStackView {
     // A keyboard's keys per area, shown in the areas' tags; set, it also lets areas be added and removed.
     private let counts: ((ScreenSettings) -> [Int])?
     var setup: ScreenSettings { didSet { show() } }
+    // The rows after Effect, shown only while the Screen effect runs, and the pause rows, always there.
+    private(set) var rows: [RowView] = []
+    private(set) var pauseRows: [RowView] = []
 
-    init(setup: ScreenSettings, brightness: Bool, battery: Bool = false, counts: ((ScreenSettings) -> [Int])? = nil, reset: @escaping () -> [Zone]) {
+    // lit: what the effect lights, for the hints (the keys, the light, the lights); pauseFor: the pause row's hint.
+    init(setup: ScreenSettings, brightness: Bool, battery: Bool = false, lit: String, pauseFor: String = "For the Screen effect",
+         counts: ((ScreenSettings) -> [Int])? = nil, reset: @escaping () -> [Zone]) {
         self.setup = setup
         self.reset = reset
         self.counts = counts
-        super.init(frame: .zero)
-        orientation = .horizontal
-        alignment = .top
-        spacing = 20
+        super.init()
         rate.maxValue = 9
         rate.numberOfTickMarks = 10
         rate.allowsTickMarkValuesOnly = true
         for control in [monitorPopup, boost, rate, bright, smooth, pause, lowBattery] as [NSControl] { control.target = self; control.action = #selector(edited) }
         monitorPopup.setAccessibilityLabel("Monitor")
-        monitorPopup.toolTip = "Monitor"
-        pause.toolTip = "Pause while the screen is locked or asleep"
-        pause.setAccessibilityLabel("Pause when the screen is off or locked")
-        lowBattery.toolTip = "Below \(ScreenSettings.batteryLimit)% battery, unless it charges"
-        lowBattery.setAccessibilityLabel("Pause on low battery")
+        monitorPopup.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true
         preview.picked = { [weak self] in
             guard let self = self else { return }
             self.show()
@@ -53,43 +53,40 @@ final class ScreenBox: NSStackView {
             self.setup.zones = zones
             self.changed?(self.setup)
         }
-        // Compact, so the Litra's page still fits Windows' height: the areas' reset beside the monitor, the sliders and the switches side by side.
-        let resetButton = NSButton(title: "Reset areas", target: self, action: #selector(resetAreas))
-        func across(_ views: [NSView]) -> NSStackView {
-            let row = NSStackView(views: views)
-            row.orientation = .horizontal
-            row.alignment = .top
-            row.spacing = 16
-            return row
-        }
-        var sliders = [Ui.sliderRow("Intensity", boost, boostValue, width: 150).0, Ui.sliderRow("Update rate", rate, rateValue, width: 150).0]
+        let resetButton = NSButton(title: "Reset", target: self, action: #selector(resetAreas))
+        resetButton.setAccessibilityLabel("Reset the screen areas")
         addButton.target = self
         addButton.action = #selector(addArea)
-        monitorPopup.widthAnchor.constraint(equalToConstant: counts == nil ? 200 : 150).isActive = true
-        var rows: [NSView] = [across(counts == nil ? [monitorPopup, resetButton] : [monitorPopup, addButton, resetButton])]
-        if brightness {
-            rows.append(across(sliders))
-            sliders = [Ui.sliderRow("Brightness", bright, brightValue, width: 150).0]
-        }
-        // A wireless keyboard's third switch shortens the names, so the row keeps the box's width (Windows: Pause, then Screen off or
-        // locked and Low battery).
-        let pauseHead = Ui.secondary("Pause")
-        pauseHead.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let switches = across(battery
-            ? [Ui.toggleRow("Smooth", smooth), pauseHead, Ui.toggleRow("Locked", pause), Ui.toggleRow("Low battery", lowBattery)]
-            : [Ui.toggleRow("Smooth changes", smooth), Ui.toggleRow("Pause when locked", pause)])
-        switches.spacing = 12
-        switches.alignment = .centerY
-        rows += [across(sliders), switches]
-        addArrangedSubview(preview)
-        addArrangedSubview(Ui.column(rows, spacing: 8))
+        let buttons = NSStackView(views: counts == nil ? [resetButton] : [addButton, resetButton])
+        buttons.orientation = .vertical
+        buttons.alignment = .trailing
+        let zonesControl = NSStackView(views: [preview, buttons])
+        zonesControl.alignment = .bottom
+        zonesControl.spacing = 12
+        let zonesRow = Rows.row("Zones", counts == nil ? "" : "Drag to move, the corner to resize", zonesControl)
+        rows = [zonesRow, Rows.row("Monitor", "The screen \(lit) follow", monitorPopup),
+                Rows.row("Color boost", "Stronger screen colors on \(lit)", Rows.slider(boost, boostValue)),
+                Rows.row("Update rate", "How often \(lit) follow the screen", Rows.slider(rate, rateValue))]
+        if brightness { rows.append(Rows.row("Brightness", "How bright \(lit) are", Rows.slider(bright, brightValue))) }
+        rows.append(Rows.row("Smooth changes", "Colors fade instead of jumping", smooth))
+        pauseRows = [Rows.row("Pause when screen off or locked", pauseFor, pause)]
+        if battery { pauseRows.append(Rows.row("Pause on low battery", pauseFor + ", on a wireless keyboard", lowBattery)) }
         show()
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    // The pause rows apply only while something G-Lite runs can pause; greyed, their switches show off.
+    func pausing(_ on: Bool) {
+        pauseApplies = on
+        for row in pauseRows { row.enable(on); (row.control as? NSSwitch)?.isEnabled = on }
+        show()
+    }
+    private var pauseApplies = true
 
-    // The preview follows the screen while the box shows.
-    func showing(_ on: Bool) { preview.follow(on ? setup.monitor : nil) }
+    // The Screen effect's rows show while it runs, and the preview follows the screen then.
+    func showing(_ on: Bool) {
+        for row in rows { row.isHidden = !on }
+        preview.follow(on ? setup.monitor : nil)
+    }
 
     private func show() {
         monitors = ScreenSource.monitors()
@@ -103,8 +100,8 @@ final class ScreenBox: NSStackView {
         bright.integerValue = setup.bright
         brightValue.stringValue = "\(setup.bright)%"
         smooth.state = setup.smooth ? .on : .off
-        pause.state = setup.pauseWhenLocked ? .on : .off
-        lowBattery.state = setup.pauseOnBattery ? .on : .off
+        pause.state = pauseApplies && setup.pauseWhenLocked ? .on : .off
+        lowBattery.state = pauseApplies && setup.pauseOnBattery ? .on : .off
         preview.zones = setup.zones
         preview.counts = counts?(setup)
         addButton.isEnabled = setup.zones.count < ScreenSettings.maxZones
@@ -166,8 +163,8 @@ final class ScreenPreview: NSView {
 
     init() {
         super.init(frame: .zero)
-        widthAnchor.constraint(equalToConstant: 200).isActive = true
-        heightAnchor.constraint(equalToConstant: 113).isActive = true
+        widthAnchor.constraint(equalToConstant: 240).isActive = true
+        heightAnchor.constraint(equalToConstant: 135).isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError() }

@@ -33,25 +33,24 @@ final class LiveKeyboardPage: DevicePage {
     private var gKeysChanged: Bool { gKeys != nil && storedGKeys != nil && gKeys! != storedGKeys! }
     private lazy var game = GameKeys(device, supported: kind.gameMode && layout != nil, experimental: kind.gameModeExperimental)
     private lazy var gameBox: GameModeBox? = layout.flatMap { layout in game.map { GameModeBox(layout: layout, game: $0, page: self) } }
-    private var gameArea = NSView()
     // Settings, Bindings (the G keys) and Game, those this keyboard has.
     private lazy var views = ["Settings"] + (kind.gKeys != nil ? ["Bindings"] : []) + (game != nil ? ["Game"] : [])
     private lazy var viewPick = NSSegmentedControl(labels: views, trackingMode: .selectOne, target: nil, action: nil)
     private var openView = "Settings"
     private var showingKeys: Bool { openView == "Bindings" }
     private lazy var idleBox: IdleBox? = kind.profile && !kind.noIdleTimes ? IdleBox(offersNever: false) : nil
-    private var lightingRow = NSView(), idleArea = NSView(), idleHeight: NSLayoutConstraint?
+    private var lightingSection = NSView(), idleSection = NSView(), savingSection = NSView()
     private let slotPicker = NSSegmentedControl(labels: [], trackingMode: .selectOne, target: nil, action: nil)
     private lazy var buttonRows = ButtonRows(actions: Bindings.keyboardActions)
-    private var gKeysBox = NSView(), lightingBox = NSView(), keysPicture: NSView?
+    private var gKeysSection = NSView()
 
     private let effect = NSPopUpButton(), color = NSColorWell(), direction = NSPopUpButton()
     private let speed = Ui.slider(), intensity = Ui.slider(), level = Ui.slider()
-    private let intensityValue = Ui.value(), levelValue = Ui.value()
+    private let intensityValue = Ui.value(), levelValue = Ui.value(), speedValue = Ui.value()
     private let save = NSButton(title: "Save to keyboard", target: nil, action: nil)
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
     private let backups = NSButton(title: "Backups", target: nil, action: nil)
-    private var rows: [String: NSGridRow] = [:]
+    private var rows: [String: RowView] = [:]
     private lazy var layout = KeyLayout.forKeyboard(device)
     private lazy var picture = layout.map(KeyPicture.init)
     // G-Lite's own effects after the keyboard's, drawn key by key through 0x8081 (LiveEffects).
@@ -62,7 +61,7 @@ final class LiveKeyboardPage: DevicePage {
     private var setupKey: String { "screen." + device.settingsKey }
     private lazy var screenBox: ScreenBox = {
         let box = ScreenBox(setup: ScreenSettings.fromText(Settings.get(setupKey)), brightness: false, battery: device.has(0x1004),
-                            counts: picture.map { picture in { setup in setup.counts(KeyField.from(picture)) } }) { ScreenSettings.defaults() }
+                            lit: "the keys", pauseFor: "For the live effects and Screen", counts: picture.map { picture in { setup in setup.counts(KeyField.from(picture)) } }) { ScreenSettings.defaults() }
         box.changed = { [weak self] setup in
             guard let self = self else { return }
             Settings.set(self.setupKey, setup.toText())
@@ -79,10 +78,7 @@ final class LiveKeyboardPage: DevicePage {
         }
         return box
     }()
-    // The hint in the title, so the page keeps Windows' height.
-    private lazy var screenArea: NSView = Ui.box(picture == nil ? "Screen" : "Screen: pick an area, then click or drag over keys to give them to it", screenBox)
     private var screening: Bool { current.effect == 0xFE }
-    private var note = NSTextField()
 
     private var rememberedKey: String { "lighting." + device.settingsKey }
     private var backupId: String { device.settingsKey }
@@ -109,11 +105,7 @@ final class LiveKeyboardPage: DevicePage {
         save.target = self; save.action = #selector(saveClicked); save.keyEquivalent = "\r"
         revert.target = self; revert.action = #selector(revertClicked)
         backups.target = self; backups.action = #selector(showBackups)
-        color.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        for popup in [effect, direction] { popup.widthAnchor.constraint(equalToConstant: 160).isActive = true }
-        // Narrower beside the When idle box.
-        for slider in [speed, intensity, level] { slider.widthAnchor.constraint(equalToConstant: idleBox == nil ? 280 : 200).isActive = true }
-        for value in [intensityValue, levelValue] { value.widthAnchor.constraint(equalToConstant: 44).isActive = true }
+        for popup in [effect, direction] { popup.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true }
 
         viewPick.target = self; viewPick.action = #selector(viewPicked)
         viewPick.selectedSegment = 0
@@ -133,30 +125,21 @@ final class LiveKeyboardPage: DevicePage {
         partPicker.target = self; partPicker.action = #selector(partPicked)
         partPicker.setAccessibilityLabel("Part")
         picture?.bar = kind.bar
-        let zoneRow = NSStackView(views: [perZone, Ui.label("Per zone"), partPicker])
-        zoneRow.spacing = 10
-        let grid = NSGridView(views: [
-            [Ui.label("Zone"), zoneRow],
-            [Ui.label("Effect"), effect],
-            [Ui.label("Colour"), color],
-            [Ui.label("Speed"), speed],
-            [Ui.label("Intensity"), NSStackView(views: [intensity, intensityValue])],
-            [Ui.label("Direction"), direction],
-            [Ui.label("Brightness"), NSStackView(views: [level, levelValue])],
-        ])
-        grid.column(at: 0).xPlacement = .trailing
-        grid.rowSpacing = 12
-        grid.rowAlignment = .firstBaseline
-        for (i, name) in ["zone", "effect", "color", "speed", "intensity", "direction", "level"].enumerated() { rows[name] = grid.row(at: i) }
-        // A switch has no baseline, so the Zone row is centred instead.
-        rows["zone"]?.rowAlignment = .none
-        rows["zone"]?.yPlacement = .center
-        note = Ui.hint(kind.profile ? "Changes show at once. Save to keyboard keeps them in its profile, so they stay without G-Lite."
-                           : "Changes show at once. G-Lite sets them again each time it starts; the keyboard doesn't keep them.")
+        rows["zone"] = Rows.row("Per zone", "The keys and the light bar lit apart", perZone)
+        rows["part"] = Rows.row("Part", "Which one the settings below change", partPicker)
+        rows["effect"] = Rows.row("Effect", "What the lighting does", effect)
+        rows["color"] = Rows.row("Color", "The effect's color", color)
+        rows["direction"] = Rows.row("Direction", "Which way the effect moves", direction)
+        rows["level"] = Rows.row("Brightness", kind.bar != nil ? "The keys and the light bar together" : "How bright the keys are",
+                                 Rows.slider(level, levelValue))
+        rows["speed"] = Rows.row("Speed", "How fast the effect moves", Rows.slider(speed, speedValue))
+        rows["intensity"] = Rows.row("Intensity", "How strong the effect is", Rows.slider(intensity, intensityValue))
+        var lightRows: [NSView] = ["zone", "part", "effect"].map { rows[$0]! }
+        lightRows += screenBox.rows
+        lightRows += ["color", "direction", "level", "speed", "intensity"].map { rows[$0]! }
+        lightRows += screenBox.pauseRows
+        lightingSection = Rows.section("Lighting", lightRows)
         runner?.screenSetup = screenBox.setup
-        keysPicture = picture.map { pictureBox($0) }
-        lightingBox = Ui.box("Lighting", grid)
-        lightingRow = lightingBox
         if let idleBox = idleBox {
             idleBox.changed = { [weak self] idle, dim, sleep in
                 guard let self = self else { return }
@@ -167,20 +150,17 @@ final class LiveKeyboardPage: DevicePage {
                 self.refresh()
                 self.showStatus()
             }
-            let spacer = NSView()
-            spacer.setContentHuggingPriority(.init(1), for: .vertical)
-            idleArea = Ui.box("When idle", Ui.column([idleBox, spacer]))
-            let row = NSStackView(views: [lightingBox, idleArea])
-            row.alignment = .top
-            idleHeight = idleArea.heightAnchor.constraint(equalTo: lightingBox.heightAnchor)
-            lightingRow = row
+            idleSection = Rows.section("When idle", idleBox.rows)
         }
-        gKeysBox = Ui.box("G keys", buttonRows)
-        gKeysBox.isHidden = true
-        if let gameBox = gameBox { gameArea = Ui.box("Game mode", gameBox) }
-        gameArea.isHidden = true
-        view = Ui.page(header: header, body: (keysPicture.map { [$0] } ?? []) + [lightingRow, screenArea, note, gKeysBox, gameArea], status: status,
-                       buttons: kind.profile ? [slotPicker, backups, revert, save] : [revert])
+        idleSection.isHidden = idleBox == nil
+        savingSection = Rows.section("Saving", [Rows.note("G-Lite can't save to this keyboard yet. It keeps your lighting and sets it again "
+            + "when G-Lite starts and when you open this screen. Picking – as the G-Lite preset gives the keyboard its own lighting back.")])
+        gKeysSection = Rows.section("G keys", [buttonRows])
+        gKeysSection.isHidden = true
+        let sticky = Rows.sticky((picture.map { [$0] } ?? []) + (gameBox.map { [$0.picture] } ?? []))
+        view = Rows.page(header: header, sticky: sticky,
+                         sections: [lightingSection, idleSection, savingSection, gKeysSection] + (gameBox.map { [$0.section] } ?? []),
+                         status: status, buttons: kind.profile ? [slotPicker, backups, revert, save] : [revert])
         header.show(device)
         refresh()
         load()
@@ -203,6 +183,8 @@ final class LiveKeyboardPage: DevicePage {
         }
         effect.selectItem(at: unknownStored && !dirty ? -1 : effects.firstIndex { $0.id == viewed.effect } ?? 1)
         rows["zone"]?.isHidden = !parts || live
+        rows["part"]?.isHidden = !parts || live
+        rows["part"]?.enable(known && bar != nil)
         perZone.state = bar != nil ? .on : .off
         perZone.isEnabled = known
         partPicker.isEnabled = known && bar != nil
@@ -213,18 +195,19 @@ final class LiveKeyboardPage: DevicePage {
         rows["intensity"]?.isHidden = !(live && info.intensity || !live && kind.intensity && info.intensity)
         if gKeys == nil && showingKeys { openView = "Settings" }
         let settings = openView == "Settings"
-        keysPicture?.isHidden = !settings
-        lightingRow.isHidden = !settings
+        picture?.isHidden = openView == "Game"
+        gameBox?.picture.isHidden = openView != "Game"
+        lightingSection.isHidden = !settings
         idleBox?.show(current, enabled: loaded)
         // A live effect isn't saved, so its idle times wouldn't be either.
-        idleArea.isHidden = live
-        idleHeight?.isActive = !live
-        screenArea.isHidden = !screening || !settings
+        idleSection.isHidden = idleBox == nil || live || !settings
+        savingSection.isHidden = kind.profile || !settings
         screenBox.showing(screening && settings)
-        // A live effect runs only while G-Lite does, which the status line says.
-        note.isHidden = screening || !settings
-        gKeysBox.isHidden = !showingKeys
-        gameArea.isHidden = openView != "Game"
+        screenBox.pausing(live)
+        rows["effect"]?.hint.stringValue = picture != nil && screening ? "Pick an area below, then click or drag over keys to give them to it"
+            : "What the lighting does"
+        gKeysSection.isHidden = !showingKeys
+        gameBox?.section.isHidden = openView != "Game"
         gameBox?.show()
         if let bindings = views.firstIndex(of: "Bindings") { viewPick.setEnabled(gKeys != nil, forSegment: bindings) }
         viewPick.selectedSegment = views.firstIndex(of: openView) ?? 0
@@ -243,6 +226,7 @@ final class LiveKeyboardPage: DevicePage {
         }
         intensity.integerValue = viewed.intensity
         intensityValue.stringValue = "\(viewed.intensity)%"
+        speedValue.stringValue = info.speed ? "\(speed.integerValue)%" : ""
         direction.removeAllItems()
         direction.addItems(withTitles: directionNames)
         direction.selectItem(at: directions.firstIndex(of: viewed.direction) ?? -1)

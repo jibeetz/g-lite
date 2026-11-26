@@ -1,6 +1,7 @@
 import AppKit
 
-// The screen for Logitech devices that aren't G devices (app/OtherDevicePage.cs): one box per setting the device has, sent live.
+// The screen for Logitech devices that aren't G devices (app/OtherDevicePage.cs): a section of rows per feature the device has, sent
+// live; Easy-Switch is left out with one computer.
 // current is on the screen, sent is on the device, stored is what was read at load, and remembered holds only what the user changed:
 // it's kept as device.<device> and sent again at each load.
 final class OtherPage: DevicePage {
@@ -12,9 +13,9 @@ final class OtherPage: DevicePage {
 
     private var bright: NSSlider?, dpi: NSSlider?, shift: NSSlider?, level: NSSlider?
     private var brightValue = Ui.value(), dpiValue = Ui.value(), shiftValue = Ui.value(), levelValue = Ui.value()
-    private var shiftHead: NSTextField?, levelHead: NSTextField?, delayHead: NSTextField?
+    private var shiftRow: RowView?, autoRow: RowView?, levelRow: RowView?, delayRows: [RowView] = []
     private var shiftOn: NSSwitch?, invert: NSSwitch?, thumb: NSSwitch?, light: NSSwitch?, auto: NSSwitch?
-    private var delays: [NSPopUpButton] = [], delayLabels: [NSTextField] = []
+    private var delays: [NSPopUpButton] = []
     private var hosts: NSSegmentedControl?, hostsBox: NSView?
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
 
@@ -30,122 +31,96 @@ final class OtherPage: DevicePage {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        var parts: [(String, Bool, NSView)] = []
-        if device.has(0x8040) { parts.append((device.kind == "device" ? "Screens" : "Brightness", false, brightnessBox())) }
-        if device.has(0x2201) { parts.append(("Pointer", false, pointerBox())) }
-        if device.has(0x2110) || device.has(0x2111) || device.has(0x2121) { parts.append(("Scroll wheel", true, wheelBox())) }
-        if device.has(0x2150) { parts.append(("Thumb wheel", true, thumbBox())) }
-        if device.has(0x1982) { parts.append(("Backlight", true, backlightBox())) }
-        if device.has(0x1814) { parts.append(("Easy-Switch", false, easySwitchBox())) }
-        // Two half boxes in a row share it, as on Windows.
-        var body: [NSView] = []
-        var index = 0
-        while index < parts.count {
-            let part = parts[index]
-            if part.1 && index + 1 < parts.count && parts[index + 1].1 {
-                let left = Ui.box(part.0, part.2), right = Ui.box(parts[index + 1].0, parts[index + 1].2)
-                let row = NSStackView(views: [left, right])
-                row.alignment = .top
-                row.distribution = .fill
-                left.widthAnchor.constraint(equalTo: right.widthAnchor, multiplier: 1.6).isActive = true
-                left.heightAnchor.constraint(equalTo: right.heightAnchor).isActive = true
-                body.append(row)
-                index += 2
-                continue
-            }
-            let box = Ui.box(part.0, part.2)
-            if part.0 == "Easy-Switch" { hostsBox = box }
-            body.append(box)
-            index += 1
-        }
+        var sections: [NSView] = []
+        if device.has(0x8040) { sections.append(brightnessSection()) }
+        if device.has(0x2201) { sections.append(pointerSection()) }
+        if device.has(0x2110) || device.has(0x2111) || device.has(0x2121) { sections.append(wheelSection()) }
+        if device.has(0x2150) { sections.append(thumbSection()) }
+        if device.has(0x1982) { sections.append(backlightSection()) }
+        if device.has(0x1814) { let section = easySwitchSection(); hostsBox = section; sections.append(section) }
         revert.target = self
         revert.action = #selector(revertClicked)
-        view = Ui.page(header: header, body: body, status: status, buttons: [revert])
+        view = Rows.page(header: header, sticky: nil, sections: sections, status: status, buttons: [revert])
         header.show(device)
         refresh()
         load()
     }
 
-    // ---- boxes ----
+    // ---- sections ----
 
-    private func brightnessBox() -> NSView {
+    private func brightnessSection() -> NSView {
         let slider = Ui.slider(self, #selector(brightChanged))
         bright = slider
-        return Ui.column([Ui.sliderRow("Brightness", slider, brightValue).0,
-                          Ui.hint(device.kind == "device" ? "How bright the key screens are. Logi Options+ may set it again when it starts."
-                                  : "Logi Options+ may set it again when it starts.")])
+        return Rows.section(device.kind == "device" ? "Screens" : "Brightness", [
+            Rows.row("Brightness", device.kind == "device" ? "The key screens; Logi Options+ may set it again"
+                     : "Logi Options+ may set it again when it starts", Rows.slider(slider, brightValue))])
     }
 
-    private func pointerBox() -> NSView {
+    private func pointerSection() -> NSView {
         let slider = Ui.slider(self, #selector(dpiChanged))
         dpi = slider
-        return Ui.sliderRow("Speed", slider, dpiValue).0
+        return Rows.section("Pointer", [Rows.row("Speed", "How far the pointer moves", Rows.slider(slider, dpiValue))])
     }
 
-    private func wheelBox() -> NSView {
+    private func wheelSection() -> NSView {
         var rows: [NSView] = []
         if device.has(0x2110) || device.has(0x2111) {
             let toggle = Ui.toggle(self, #selector(shiftToggled))
             shiftOn = toggle
-            rows.append(Ui.toggleRow("SmartShift", toggle, note: "Switches from ratchet to free spin when you scroll fast."))
+            rows.append(Rows.row("SmartShift", "Ratchet to free spin when you scroll fast", toggle))
             let slider = Ui.slider(self, #selector(shiftChanged))
             slider.maxValue = 49
             shift = slider
-            let (row, head) = Ui.sliderRow("Switch to free spin at", slider, shiftValue)
-            shiftHead = head
+            let row = Rows.row("Switch to free spin at", "How fast you scroll, in turns a second", Rows.slider(slider, shiftValue))
+            shiftRow = row
             rows.append(row)
         }
         if device.has(0x2121) {
             let toggle = Ui.toggle(self, #selector(invertToggled))
             invert = toggle
-            rows.append(Ui.toggleRow("Invert scrolling", toggle))
+            rows.append(Rows.row("Invert scrolling", "The wheel scrolls the other way", toggle))
         }
-        return Ui.column(rows)
+        return Rows.section("Scroll wheel", rows)
     }
 
-    private func thumbBox() -> NSView {
+    private func thumbSection() -> NSView {
         let toggle = Ui.toggle(self, #selector(thumbToggled))
         thumb = toggle
-        return Ui.toggleRow("Invert", toggle)
+        return Rows.section("Thumb wheel", [Rows.row("Invert", "The thumb wheel scrolls the other way", toggle)])
     }
 
-    private func backlightBox() -> NSView {
+    private func backlightSection() -> NSView {
         let lightToggle = Ui.toggle(self, #selector(lightToggled)), autoToggle = Ui.toggle(self, #selector(autoToggled))
         light = lightToggle
         auto = autoToggle
         let slider = Ui.slider(self, #selector(levelChanged))
         level = slider
-        let (levelRow, head) = Ui.sliderRow("Level", slider, levelValue)
-        levelHead = head
-        let fades = Ui.secondary("Fades after")
-        delayHead = fades
-        var columns: [NSView] = []
+        // Plugged in, the MX Keys S's hand sensor seems off: turned on, it stays dark until a key is pressed. On battery it lights at
+        // once (an owner, 2026-11).
+        var rows: [NSView] = [Rows.row("Backlight", "Plugged in, the keys light up when you next type", lightToggle)]
+        autoRow = Rows.row("Automatic", "Dims by itself with the room's light", autoToggle)
+        levelRow = Rows.row("Level", "How bright the keys are, when not automatic", Rows.slider(slider, levelValue))
+        rows += [autoRow!, levelRow!]
+        let hints = ["Fades after this long without hands near", "Fades after this long with hands near", "Fades after this long, plugged in"]
         for (index, name) in ["Hands away", "Hands near", "Plugged in"].enumerated() {
-            let label = Ui.secondary(name)
             let popup = NSPopUpButton()
             popup.tag = index
             popup.target = self
             popup.action = #selector(delayPicked)
+            popup.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true
+            popup.setAccessibilityLabel("Fades after, " + name.lowercased())
             delays.append(popup)
-            delayLabels.append(label)
-            let column = Ui.column([label, popup], spacing: 4)
-            columns.append(column)
+            let row = Rows.row(name, hints[index], popup)
+            delayRows.append(row)
+            rows.append(row)
         }
-        let delayRow = NSStackView(views: columns)
-        delayRow.distribution = .fillEqually
-        return Ui.column([
-            // Plugged in, the MX Keys S's hand sensor seems off: turned on, it stays dark until a key is pressed. On battery it lights at
-            // once (an owner, 2026-11).
-            Ui.toggleRow("Backlight", lightToggle, note: "Plugged in, the keys light up when you next type."),
-            Ui.toggleRow("Automatic", autoToggle, note: "Dims by itself with the room's light."),
-            levelRow, Ui.column([fades, delayRow], spacing: 6),
-        ])
+        return Rows.section("Backlight", rows)
     }
 
-    private func easySwitchBox() -> NSView {
+    private func easySwitchSection() -> NSView {
         let picker = NSSegmentedControl(labels: ["1", "2", "3"], trackingMode: .selectOne, target: self, action: #selector(hostPicked))
         hosts = picker
-        return Ui.column([picker, Ui.hint("Switching sends the \(noun) to that computer, like its Easy-Switch button.")])
+        return Rows.section("Easy-Switch", [Rows.row("Computer", "Switching sends the \(noun) there", picker)])
     }
 
     // ---- changes ----
@@ -334,7 +309,7 @@ final class OtherPage: DevicePage {
             shiftOn.state = on ? .on : .off
             shift.isEnabled = on
             shift.integerValue = max(0, min(49, (on ? threshold : state?.shiftDefault ?? 10) - 1))
-            Ui.dim(shiftHead, !on)
+            shiftRow?.enable(on)
             shiftValue.stringValue = on ? Ui.number(Double(threshold) / 4) + " turns a second" : ""
         }
         if let invert = invert {
@@ -350,15 +325,15 @@ final class OtherPage: DevicePage {
             light.isEnabled = ready && current[OtherSettings.light] >= 0
             light.state = lit ? .on : .off
             auto.isEnabled = ready && current[OtherSettings.auto] >= 0 && lit
+            autoRow?.enable(auto.isEnabled)
             auto.state = lit && current[OtherSettings.auto] == 1 ? .on : .off
             let manual = ready && current[OtherSettings.level] >= 0 && lit && current[OtherSettings.auto] != 1
             level.isEnabled = manual
             level.maxValue = Double(ready && state!.levels > 1 ? state!.levels - 1 : 1)
             level.integerValue = max(0, current[OtherSettings.level])
-            Ui.dim(levelHead, !manual)
+            levelRow?.enable(manual)
             levelValue.stringValue = ready && current[OtherSettings.level] >= 0 ? "\(current[OtherSettings.level] + 1) of \(state!.levels)" : ""
             let fades = ready && current[OtherSettings.away] > 0 && lit
-            Ui.dim(delayHead, !fades)
             for (index, popup) in delays.enumerated() {
                 let seconds = current[OtherSettings.delays[index]]
                 let choices = OtherPage.delayChoices(seconds)
@@ -366,7 +341,7 @@ final class OtherPage: DevicePage {
                 popup.addItems(withTitles: choices.map(OtherPage.delayText))
                 popup.selectItem(at: choices.firstIndex(of: seconds) ?? -1)
                 popup.isEnabled = fades
-                Ui.dim(delayLabels[index], !fades)
+                delayRows[index].enable(fades)
             }
         }
         if let hosts = hosts {

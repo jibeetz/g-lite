@@ -22,8 +22,7 @@ final class ZonesPage: DevicePage {
     private let effect = NSPopUpButton(), color = NSColorWell(), direction = NSPopUpButton()
     private let speed = Ui.slider(), bright = Ui.slider()
     private let brightValue = Ui.value(), speedValue = Ui.value()
-    private let lightHead = Ui.hint("")
-    private var rows: [String: NSGridRow] = [:]
+    private var rows: [String: RowView] = [:]
     private var shownEffects: [UInt8] = []
     private lazy var layout = KeyLayout.forZones(device)
     private lazy var picture = layout.map(KeyPicture.init)
@@ -36,7 +35,7 @@ final class ZonesPage: DevicePage {
     private var screening: Bool { !keyboard && Settings.get(screenKey) == "1" }
     private var setupKey: String { "screen." + device.settingsKey }
     private lazy var screenBox: ScreenBox = {
-        let box = ScreenBox(setup: follower.setup, brightness: true) { ScreenSettings.corners("").zones }
+        let box = ScreenBox(setup: follower.setup, brightness: true, lit: "the lights") { ScreenSettings.corners("").zones }
         box.changed = { [weak self] setup in
             guard let self = self else { return }
             Settings.set(self.setupKey, setup.toText())
@@ -45,7 +44,6 @@ final class ZonesPage: DevicePage {
         }
         return box
     }()
-    private lazy var screenArea: NSView = Ui.box("Screen", screenBox)
     private lazy var follower = ScreenFollower(setup: ScreenSettings.corners(Settings.get(setupKey))) { [weak self] colors in self?.sendScreen(colors) }
     private let clock = Date()
     // The Audio effect (ZoneLighting.audio), on a keyboard: the level rises at once and falls at 1.6 a second, sent in 50 steps, all
@@ -61,7 +59,7 @@ final class ZonesPage: DevicePage {
             + "Select the keys you want to disable while gaming (Fn+F8 turns Game mode on). Changes apply immediately and can be saved in "
             + "your G-Lite presets, but not in the keyboard's memory.")
     } }
-    private var gameArea = NSView(), lightingBox = NSView(), keysPicture: NSView?
+    private var lightingSection = NSView(), savingSection = NSView()
     private let viewPick = NSSegmentedControl(labels: ["Settings", "Game"], trackingMode: .selectOne, target: nil, action: nil)
     private var showingGame = false
     private lazy var perKey = keyboard && picture != nil && layout?.zones != true && device.has(0x8080)
@@ -91,46 +89,38 @@ final class ZonesPage: DevicePage {
         for control in [effect, direction] as [NSControl] { control.target = self; control.action = #selector(changed) }
         for slider in [speed, bright] { slider.target = self; slider.action = #selector(changed) }
         color.target = self; color.action = #selector(changed)
-        color.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        for popup in [effect, direction] { popup.widthAnchor.constraint(equalToConstant: 160).isActive = true }
-        for slider in [speed, bright] { slider.widthAnchor.constraint(equalToConstant: 280).isActive = true }
-        for value in [brightValue, speedValue] { value.widthAnchor.constraint(equalToConstant: 44).isActive = true }
+        for popup in [effect, direction] { popup.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true }
         if !keyboard {
             shownZones = Array(0..<count)
             setZoneLabels(["All"] + ZoneLighting.names)
         }
-
-        let grid = NSGridView(views: [
-            [Ui.label("Zone"), zonePicker],
-            [Ui.label("Effect"), effect],
-            [Ui.label("Colour"), color],
-            [Ui.label("Direction"), direction],
-            [Ui.label("Speed"), NSStackView(views: [speed, speedValue])],
-            [Ui.label("Brightness"), NSStackView(views: [bright, brightValue])],
-        ])
-        grid.column(at: 0).xPlacement = .trailing
-        grid.rowSpacing = 12
-        grid.rowAlignment = .firstBaseline
-        for (i, name) in ["zone", "effect", "color", "direction", "speed", "bright"].enumerated() { rows[name] = grid.row(at: i) }
+        rows["zone"] = Rows.row("Zone", "", zonePicker)
+        rows["effect"] = Rows.row("Effect", "What the lighting does", effect)
+        rows["color"] = Rows.row("Color", "The effect's color", color)
+        rows["direction"] = Rows.row("Direction", "Which way the effect moves", direction)
+        rows["bright"] = Rows.row("Brightness", "How bright the lights are", Rows.slider(bright, brightValue))
+        rows["speed"] = Rows.row("Speed", "How fast the effect moves", Rows.slider(speed, speedValue))
+        var lightRows: [NSView] = [rows["zone"]!, rows["effect"]!]
+        if !keyboard { lightRows += screenBox.rows }
+        lightRows += ["color", "direction", "bright", "speed"].map { rows[$0]! }
+        if !keyboard { lightRows += screenBox.pauseRows }
+        lightingSection = Rows.section("Lighting", lightRows)
+        let saving = Rows.section("Saving", [Rows.note("G-Lite can't save to " + (keyboard ? "this keyboard" : "these speakers")
+            + " yet. It keeps your lighting and sets it again when G-Lite starts and when you open this screen.")])
+        savingSection = saving
         viewPick.target = self; viewPick.action = #selector(viewPicked)
         viewPick.selectedSegment = 0
-        keysPicture = picture.map { pictureBox($0) }
         if let speakers = speakers {
-            speakers.translatesAutoresizingMaskIntoConstraints = false
             speakers.heightAnchor.constraint(equalToConstant: 150).isActive = true
-            speakers.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
             speakers.picked = { [weak self] zone in
                 guard let self = self, self.zonePicker.isEnabled, let at = self.shownZones.firstIndex(of: zone) else { return }
                 self.picked = at + 1
                 self.refresh()
             }
-            keysPicture = Ui.box("Live on the speakers", speakers)
         }
-        lightingBox = Ui.box("Lighting", Ui.column([lightHead, grid], spacing: 8))
-        if let gameBox = gameBox { gameArea = Ui.box("Game mode", gameBox) }
-        gameArea.isHidden = true
-        view = Ui.page(header: header, body: (keysPicture.map { [$0] } ?? []) + [lightingBox] + (keyboard ? [gameArea] : [screenArea]),
-                       status: status, buttons: [])
+        let pictures: [NSView] = (picture.map { [$0] } ?? []) + (speakers.map { [$0] } ?? []) + (gameBox.map { [$0.picture] } ?? [])
+        view = Rows.page(header: header, sticky: pictures.isEmpty ? nil : Rows.sticky(pictures),
+                         sections: [lightingSection, saving] + (gameBox.map { [$0.section] } ?? []), status: status, buttons: [])
         if picture != nil || speakers != nil {
             frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                 if self?.view.window?.isVisible == true { self?.showFrame() }
@@ -569,9 +559,15 @@ final class ZonesPage: DevicePage {
         let shown = displayed
         let info = shown.flatMap { self.info($0.effect) }
         let mixed = picked == 0 && current.map { lights in lights.contains { $0 != lights[0] } } ?? false
-        lightHead.stringValue = zones?.isEmpty == true ? "Not found on these \(noun)" : shown == nil ? "As set on the \(noun): pick an effect to change it"
-            : mixed ? "The zones differ: a change sets all of them" : ""
-        lightHead.isHidden = lightHead.stringValue.isEmpty
+        rows["effect"]?.hint.stringValue = zones?.isEmpty == true ? "Not found on these \(noun)"
+            : screening ? "The lights follow the screen"
+            : shown.map { live($0.effect) } == true ? "Drawn by G-Lite, key by key"
+            : shown?.effect == ZoneLighting.audio.id ? "Follows the Mac's sound"
+            : shown != nil || !ready ? "What the lighting does"
+            : keyboard ? "The keyboard's own lighting, until you pick one" : "The speakers' own lighting, until you pick one"
+        rows["zone"]?.hint.stringValue = mixed && !screening ? "Zones differ: a change sets all of them"
+            : speakers != nil ? "Click a light to pick it" : "The lights to set"
+        rows["effect"]?.enable(ready)
         rows["zone"]?.isHidden = keyboard && shownZones.count <= 1
         zonePicker.isEnabled = ready
         zonePicker.selectedSegment = picked
@@ -592,10 +588,12 @@ final class ZonesPage: DevicePage {
         rows["zone"]?.isHidden = rows["zone"]?.isHidden == true || screening
         rows["color"]?.isHidden = !hasColor
         rows["direction"]?.isHidden = !plain || info?.direction != true || shown.map { live($0.effect) } == true
-        if !keyboard { screenArea.isHidden = !screening; screenBox.showing(screening) }
-        keysPicture?.isHidden = showingGame
-        lightingBox.isHidden = showingGame
-        gameArea.isHidden = !showingGame
+        if !keyboard { screenBox.showing(screening); screenBox.pausing(screening) }
+        picture?.isHidden = showingGame
+        gameBox?.picture.isHidden = !showingGame
+        lightingSection.isHidden = showingGame
+        savingSection.isHidden = showingGame
+        gameBox?.section.isHidden = !showingGame
         gameBox?.show()
         viewPick.selectedSegment = showingGame ? 1 : 0
         rows["speed"]?.isHidden = !hasSpeed

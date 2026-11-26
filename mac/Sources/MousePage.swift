@@ -15,12 +15,12 @@ final class MousePage: DevicePage {
     private let color = NSColorWell()
     private let bright = Ui.slider(), speed = Ui.slider(), dpi = Ui.slider()
     private let brightValue = Ui.value(), speedValue = Ui.value(), dpiValue = Ui.value()
-    private var lightHead = NSTextField(), colorHead = Ui.secondary("Colour"), brightHead = NSTextField(), speedHead = NSTextField()
+    private var effectRow: RowView!, colorRow: RowView!, brightRow: RowView!, speedRow: RowView!, noteRow: RowView!
+    private var stageRow: RowView!, rateRow: RowView!, invertRow: RowView!
+    private var lightingSection = NSView(), sensitivitySection = NSView()
     private let stages = NSSegmentedControl(labels: ["–"], trackingMode: .selectOne, target: nil, action: nil)
     private let rates = NSSegmentedControl(labels: ["–"], trackingMode: .selectOne, target: nil, action: nil)
-    private let stageHead = Ui.secondary("DPI stage"), rateHead = Ui.secondary("Report rate"), rateHint = Ui.hint("")
     private let invert = Ui.toggle()
-    private var invertRow = NSView()
     private let save = NSButton(title: "Save to mouse", target: nil, action: nil)
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
     private let backups = NSButton(title: "Backups", target: nil, action: nil)
@@ -28,14 +28,13 @@ final class MousePage: DevicePage {
     // The Bindings view (app/MousePage.cs and app/Buttons.cs, ButtonRows): a row per button with what it does, Keystroke… recording
     // the next keys, and the button spy (0x8110) lighting the row of the button pressed.
     private let viewPick = NSSegmentedControl(labels: ["Settings", "Bindings"], trackingMode: .selectOne, target: nil, action: nil)
-    private var settingsRow = NSView(), bindingsBox = NSView()
+    private var bindingsSection = NSView()
     private let buttonRows = ButtonRows(actions: Bindings.mouseActions)
     private var pressedRow = -1
     private var pressedTimer: Timer?
     private var spy: (Port, Reader)?
     private var showingButtons = false
     private let picture = MousePicture()
-    private var pictureBox = NSView()
 
     private var backupId: String { device.settingsKey }
     private var invertKey: String { "wheel.invert." + device.settingsKey }
@@ -61,47 +60,30 @@ final class MousePage: DevicePage {
         save.target = self; save.action = #selector(saveClicked); save.keyEquivalent = "\r"
         revert.target = self; revert.action = #selector(revertClicked)
         backups.target = self; backups.action = #selector(showBackups)
-        color.widthAnchor.constraint(equalToConstant: 60).isActive = true
-
-        let (brightRow, brightName) = Ui.sliderRow("Brightness", bright, brightValue, width: 230)
-        let (speedRow, speedName) = Ui.sliderRow("Speed", speed, speedValue, width: 230)
-        let (dpiRow, _) = Ui.sliderRow("DPI", dpi, dpiValue, width: 230)
-        brightHead = brightName
-        speedHead = speedName
-        lightHead = Ui.secondary("")
-        invertRow = Ui.toggleRow("Invert scrolling", invert)
-        // The two boxes are as tall as the taller one: a spacer at the bottom of each takes the extra height, which otherwise went
-        // to whichever row the stack picked.
-        func spacer() -> NSView {
-            let view = NSView()
-            view.setContentHuggingPriority(.init(1), for: .vertical)
-            return view
-        }
-        let lighting = Ui.column([lightHead, Ui.column([Ui.secondary("Effect"), effects], spacing: 4),
-                                  Ui.column([colorHead, color], spacing: 4), brightRow, speedRow, spacer()])
-        let sensitivity = Ui.column([Ui.column([stageHead, stages], spacing: 4), dpiRow,
-                                     Ui.column([rateHead, rates, rateHint], spacing: 4), invertRow, spacer()])
-        let left = Ui.box("Lighting", lighting), right = Ui.box("Sensitivity", sensitivity)
-        let row = NSStackView(views: [left, right])
-        row.alignment = .top
-        row.distribution = .fillEqually
-        left.heightAnchor.constraint(equalTo: right.heightAnchor).isActive = true
+        stageRow = Rows.row("DPI stage", "The DPI buttons switch between these", stages)
+        rateRow = Rows.row("Report rate", "How often the mouse reports, in Hz", rates)
+        invertRow = Rows.row("Invert scrolling", "The wheel scrolls the other way", invert)
+        sensitivitySection = Rows.section("Sensitivity", [stageRow, Rows.row("DPI", "The picked stage's sensitivity", Rows.slider(dpi, dpiValue)),
+                                                          rateRow, invertRow])
+        noteRow = Rows.row("Lighting", "Not supported yet on this mouse", NSView())
+        effectRow = Rows.row("Effect", "What the lighting does", effects)
+        colorRow = Rows.row("Color", "The effect's color", color)
+        brightRow = Rows.row("Brightness", "How bright the light is", Rows.slider(bright, brightValue))
+        speedRow = Rows.row("Speed", "How fast the effect moves", Rows.slider(speed, speedValue))
+        lightingSection = Rows.section("Lighting", [noteRow, effectRow, colorRow, brightRow, speedRow])
         let upper = device.name.uppercased()
         // Whole words: PRO, not the G102 Prodigy.
         picture.pro = upper.range(of: "\\bPRO\\b", options: .regularExpression) != nil
         picture.dex = upper.range(of: "\\bDEX\\b", options: .regularExpression) != nil
         picture.g502 = upper.contains("G502")
-        pictureBox = Ui.box("Live on the mouse", picture)
-        picture.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
-        let settings = Ui.column([pictureBox, row], spacing: 18)
-        for view in [pictureBox, row] { view.widthAnchor.constraint(equalTo: settings.widthAnchor).isActive = true }
-        settingsRow = settings
         viewPick.target = self; viewPick.action = #selector(viewPicked)
         viewPick.selectedSegment = 0
         buttonRows.assigned = { [weak self] row, binding in self?.assign(row, binding) }
-        bindingsBox = Ui.box("Buttons", buttonRows)
-        bindingsBox.isHidden = true
-        view = Ui.page(header: header, body: [settings, bindingsBox], status: status, buttons: [backups, revert, save])
+        bindingsSection = Rows.section("Buttons", [buttonRows])
+        bindingsSection.isHidden = true
+        // Sensitivity first: DPI is what's changed most, and some mice have no lighting.
+        view = Rows.page(header: header, sticky: picture, sections: [sensitivitySection, lightingSection, bindingsSection], status: status,
+                         buttons: [backups, revert, save])
         header.show(device)
         // The mouse forgets inverted scrolling when it turns off, so it's checked every 5 s while kept on.
         watch = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.keepInverted() }
@@ -172,8 +154,9 @@ final class MousePage: DevicePage {
     private func showView(buttons: Bool) {
         showingButtons = buttons
         buttonRows.stopRecording()
-        settingsRow.isHidden = buttons
-        bindingsBox.isHidden = !buttons
+        sensitivitySection.isHidden = buttons
+        bindingsSection.isHidden = !buttons
+        refresh()
         if buttons { startSpy() } else { stopSpy() }
         viewPick.selectedSegment = buttons ? 1 : 0
         syncButtons()
@@ -558,26 +541,28 @@ final class MousePage: DevicePage {
         let lit = ready && !state!.zones.isEmpty, known = lit && info != nil, live = ready && !state!.readOnly
         // The G300 (saveOnly) has no brightness: each colour is on or off.
         let hasColor = known && info!.color, hasSpeed = known && info!.speed, hasBrightness = known && light.effect != 0 && !state!.saveOnly
-        lightHead.stringValue = !ready || lit
-            ? (current.light == nil && lit ? "As saved on the mouse" : device.lightIsLiveOnly ? "Live only: the mouse doesn't save it" : "")
-            : device.has(0x8071) ? "Not supported yet on this mouse" : "This mouse has no lighting G-Lite can set"
-        lightHead.isHidden = lightHead.stringValue.isEmpty
+        let unsupported = ready && !lit && device.has(0x8071)
+        lightingSection.isHidden = showingButtons || ready && !lit && !unsupported
+        noteRow.isHidden = !unsupported
+        for row in [effectRow, colorRow, speedRow] as [RowView] { row.isHidden = ready && !lit }
+        // The G300 (saveOnly) has no brightness at all.
+        brightRow.isHidden = ready && (!lit || state!.saveOnly)
+        effectRow.hint.stringValue = device.lightIsLiveOnly ? "Live only: not saved to the mouse"
+            : lit && current.light == nil ? "As saved on the mouse" : "What the lighting does"
         effects.segmentCount = shownEffects.count
         for (index, info) in shownEffects.enumerated() { effects.setLabel(info.name, forSegment: index); effects.setWidth(0, forSegment: index) }
         effects.isEnabled = lit && live
         effects.selectedSegment = known ? shownEffects.firstIndex { $0.id == light.effect } ?? -1 : -1
-        Ui.dim(colorHead, !hasColor)
+        colorRow.enable(hasColor)
         color.isEnabled = hasColor && live
         color.color = NSColor(rgb: light.color)
-        Ui.dim(brightHead, !hasBrightness)
+        brightRow.enable(hasBrightness)
         bright.isEnabled = hasBrightness && live
-        bright.integerValue = light.bright
+        bright.integerValue = hasBrightness ? light.bright : 0
         brightValue.stringValue = hasBrightness ? "\(light.bright)%" : ""
-        Ui.dim(speedHead, !hasSpeed)
+        speedRow.enable(hasSpeed)
         speed.isEnabled = hasSpeed && live
-        if hasSpeed {
-            speed.doubleValue = (Double(info!.maxPeriod - light.period) * 100 / Double(info!.maxPeriod - info!.minPeriod)).rounded()
-        }
+        speed.doubleValue = hasSpeed ? (Double(info!.maxPeriod - light.period) * 100 / Double(info!.maxPeriod - info!.minPeriod)).rounded() : 0
         speedValue.stringValue = hasSpeed ? "\(speed.integerValue)%" : ""
 
         let hasStages = ready && !state!.stages.isEmpty
@@ -590,7 +575,7 @@ final class MousePage: DevicePage {
         for (index, label) in labels.enumerated() { stages.setLabel(label, forSegment: index); stages.setWidth(0, forSegment: index) }
         stages.isEnabled = hasStages && live
         stages.selectedSegment = stage
-        Ui.dim(stageHead, !hasStages)
+        stageRow.isHidden = ready && !hasStages
         dpi.isEnabled = live && !state!.dpis.isEmpty
         dpi.maxValue = Double(max(1, (state?.dpis.count ?? 2) - 1))
         dpi.integerValue = ready && !state!.dpis.isEmpty ? OtherDevice.nearest(state!.dpis, current.dpi) : 0
@@ -602,11 +587,10 @@ final class MousePage: DevicePage {
         for (index, label) in rateLabels.enumerated() { rates.setLabel(label, forSegment: index); rates.setWidth(0, forSegment: index) }
         rates.selectedSegment = ready ? state!.rates.firstIndex(of: rate) ?? -1 : -1
         rates.isEnabled = rateOn
-        Ui.dim(rateHead, !rateOn)
-        rateHead.stringValue = "Report rate" + (ready && !state!.rates.isEmpty ? " (Hz)" : "")
-            + (ready && state!.onboard && state!.savable ? ", on save" : "")
-        rateHint.stringValue = !ready || state!.readOnly || !state!.onboard || state!.savable ? "" : "Set by the saved profile."
-        rateHint.isHidden = rateHint.stringValue.isEmpty
+        rateRow.isHidden = ready && state!.rates.isEmpty
+        rateRow.enable(rateOn)
+        rateRow.hint.stringValue = ready && state!.onboard && state!.savable ? "In Hz, applies when you save"
+            : ready && state!.onboard && !state!.readOnly ? "In Hz, set by the saved profile" : "How often the mouse reports, in Hz"
         invertRow.isHidden = !(ready && state!.canInvert)
         invert.state = ready && state!.inverted ? .on : .off
         let keepable = current.buttons == nil || Bindings.hasLeft(current.buttons, state?.buttonCount ?? 0)

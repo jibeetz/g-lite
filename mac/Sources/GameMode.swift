@@ -191,25 +191,22 @@ enum TypedKeys {
     }
 }
 
-// The Game view's box (app/GameMode.cs, GameModeBox): what Game mode does, the keyboard to pick keys on, and Clear.
-final class GameModeBox: NSStackView {
+// The Game view (app/GameMode.cs): the keyboard to pick keys on, for the sticky place, and the Game mode section: what Game mode does,
+// the keys turned off and Clear.
+final class GameModeBox: NSObject {
     let picture: KeyPicture
     private let clear = NSButton(title: "Clear", target: nil, action: nil)
     private let game: GameKeys
     private weak var page: DevicePage?
+    private var countRow: RowView!
+    // The section under the picture: the note, then the keys turned off with Clear.
+    private(set) var section = NSView()
 
     init(layout: KeyLayout, game: GameKeys, page: DevicePage, note text: String? = nil) {
         picture = KeyPicture(layout)
         self.game = game
         self.page = page
-        super.init(frame: .zero)
-        orientation = .vertical
-        alignment = .leading
-        spacing = 12
-        let note = Ui.hint(text ?? game.note)
-        note.preferredMaxLayoutWidth = 560
-        picture.translatesAutoresizingMaskIntoConstraints = false
-        picture.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+        super.init()
         picture.setAccessibilityLabel("Game mode keys")
         // The G915s' Fn key has the id the right Windows key has on the G815, and stays on.
         var fixed = Set<Int>()
@@ -234,18 +231,18 @@ final class GameModeBox: NSStackView {
         clear.target = self
         clear.action = #selector(cleared)
         clear.setAccessibilityLabel("Clear the Game mode keys")
-        addArrangedSubview(note)
-        addArrangedSubview(picture)
-        addArrangedSubview(clear)
-        picture.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
+        clear.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        countRow = Rows.row("Keys turned off", "", clear)
+        section = Rows.section("Game mode", [Rows.note(text ?? game.note), countRow])
         show()
     }
-
-    required init?(coder: NSCoder) { fatalError() }
 
     func show() {
         picture.picking?.picked = Set(game.keys.map { KeyPresses.lightingId($0) })
         clear.isEnabled = !game.keys.isEmpty
+        let count = game.keys.count, bitmap = game.controlBitmap
+        countRow.hint.stringValue = count == 0 ? (bitmap ? "None" : "Only Windows and Menu")
+            : "\(count) " + (count == 1 ? "key" : "keys") + (bitmap ? "" : ", besides Windows and Menu")
     }
 
     @objc private func cleared() {

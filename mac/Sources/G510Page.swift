@@ -23,11 +23,10 @@ final class G510Page: DevicePage {
     private let effects = NSSegmentedControl(labels: G510Settings.effects, trackingMode: .selectOne, target: nil, action: nil)
     private let color = NSColorWell()
     private let bright = Ui.slider(), speed = Ui.slider(), brightValue = Ui.value(), speedValue = Ui.value()
-    private let colorHead = Ui.secondary("Colour")
-    private var brightHead = NSTextField(), speedHead = NSTextField()
+    private var effectRow: RowView!, colorRow: RowView!, brightRow: RowView!, speedRow: RowView!
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
     private let picture = KeyLayout.load("g510.json").map { KeyPicture($0) }
-    private var pictureArea = NSView(), lightingBox = NSView(), note = NSView(), keysBox = NSView(), gameBox = NSView()
+    private var lightingSection = NSView(), savingSection = NSView(), keysSection = NSView(), gameSection = NSView()
     private let views = ["Settings", "Bindings", "Game"]
     private lazy var viewPick = NSSegmentedControl(labels: views, trackingMode: .selectOne, target: self, action: #selector(viewPicked))
     private var openView = 0
@@ -46,19 +45,13 @@ final class G510Page: DevicePage {
         lights = (0..<G510Keys.banks).map { G510Settings.fromText(Settings.get(remembered($0))) }
         for control in [effects, color, bright, speed] as [NSControl] { control.target = self; control.action = #selector(changed) }
         revert.target = self; revert.action = #selector(revertClicked)
-        color.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        let (brightRow, brightName) = Ui.sliderRow("Brightness", bright, brightValue, width: 250)
-        let (speedRow, speedName) = Ui.sliderRow("Speed", speed, speedValue, width: 250)
-        brightHead = brightName
-        speedHead = speedName
-        let sliders = NSStackView(views: [brightRow, speedRow])
-        sliders.alignment = .top
-        sliders.spacing = 24
-        let backlight = Ui.column([Ui.column([Ui.secondary("Effect"), effects], spacing: 4), Ui.column([colorHead, color], spacing: 4), sliders])
-        note = Ui.hint("One colour for the whole keyboard. G-Lite sets it again when it starts, and runs Breathe and Cycle itself: they "
-                       + "stop when you quit G-Lite.")
-        lightingBox = Ui.box("Backlight", backlight)
-        pictureArea = picture.map { pictureBox($0) } ?? NSView()
+        effectRow = Rows.row("Effect", "What the lighting does", effects)
+        colorRow = Rows.row("Color", "One color for the whole keyboard", color)
+        brightRow = Rows.row("Brightness", "How bright the keys are", Rows.slider(bright, brightValue))
+        speedRow = Rows.row("Speed", "How fast the effect moves", Rows.slider(speed, speedValue))
+        lightingSection = Rows.section("Lighting", [effectRow, colorRow, brightRow, speedRow])
+        savingSection = Rows.section("Saving", [Rows.note("G-Lite can't save to this keyboard yet. It keeps your lighting and sets it again "
+                                                          + "when G-Lite starts and when you open this screen.")])
         bankPicker.target = self; bankPicker.action = #selector(bankPicked)
         bankPicker.setAccessibilityLabel("M key")
         buttonRows.assigned = { [weak self] row, binding in
@@ -68,11 +61,13 @@ final class G510Page: DevicePage {
             self.logAction("\(G510Keys.names[row]) in M\(self.bank + 1): " + Bindings.describe(binding))
             self.refresh()
         }
-        keysBox = Ui.box("G keys", buttonRows)
-        gameBox = Ui.box("Game mode", Ui.column([
-            Ui.hint("While its Game mode switch is on, the keyboard turns off its Windows keys itself. There are no other keys to pick."),
-            NSStackView(views: [Ui.label("Game mode switch:"), gameState])]))
-        view = Ui.page(header: header, body: [pictureArea, lightingBox, note, keysBox, gameBox], status: status, buttons: [bankPicker, revert])
+        keysSection = Rows.section("G keys", [buttonRows])
+        gameState.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        gameSection = Rows.section("Game mode", [
+            Rows.note("While its Game mode switch is on, the keyboard turns off its Windows keys itself. There are no other keys to pick."),
+            Rows.row("Game mode switch", "Read from the keyboard when this view opens", gameState)])
+        view = Rows.page(header: header, sticky: picture, sections: [lightingSection, savingSection, keysSection, gameSection],
+                         status: status, buttons: [bankPicker, revert])
         header.show(device)
         refresh()
         load()
@@ -263,24 +258,24 @@ final class G510Page: DevicePage {
         let hasColor = lit && settings!.effect != G510Settings.cycle, moving = lit && settings!.effect != G510Settings.staticEffect
         effects.isEnabled = ready
         effects.selectedSegment = known ? (settings!.on ? settings!.effect + 1 : 0) : -1
+        effectRow.enable(ready)
+        effectRow.hint.stringValue = moving ? "Drawn by G-Lite: it stops when you quit G-Lite" : "What the lighting does"
         color.isEnabled = hasColor
-        Ui.dim(colorHead, !hasColor)
+        colorRow.enable(hasColor)
         color.color = NSColor(rgb: settings?.color ?? 0xFFFFFF)
         bright.isEnabled = lit
-        Ui.dim(brightHead, !lit)
-        bright.integerValue = settings?.bright ?? 100
+        brightRow.enable(lit)
+        bright.integerValue = lit ? settings!.bright : 0
         brightValue.stringValue = lit ? "\(settings!.bright)%" : ""
         speed.isEnabled = moving
-        Ui.dim(speedHead, !moving)
-        speed.doubleValue = known ? (Double(G510Settings.maxPeriod - settings!.period) * 100
+        speedRow.enable(moving)
+        speed.doubleValue = moving ? (Double(G510Settings.maxPeriod - settings!.period) * 100
             / Double(G510Settings.maxPeriod - G510Settings.minPeriod)).rounded() : 0
         speedValue.stringValue = moving ? "\(speed.integerValue)%" : ""
         revert.isEnabled = ready && current != nil && read != nil
-        let settingsView = openView == 0
-        for part in [pictureArea, lightingBox, note] { part.isHidden = !settingsView }
-        pictureArea.isHidden = openView == 1
-        keysBox.isHidden = openView != 1
-        gameBox.isHidden = openView != 2
+        for part in [lightingSection, savingSection] { part.isHidden = openView != 0 }
+        keysSection.isHidden = openView != 1
+        gameSection.isHidden = openView != 2
         viewPick.selectedSegment = openView
         bankPicker.selectedSegment = bank
         buttonRows.show(names: G510Keys.names, bindings: gKeys[bank], editable: true, note: "Not working yet: G-Lite doesn't read the G keys yet")

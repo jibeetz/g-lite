@@ -16,21 +16,20 @@ final class KeyboardPage: DevicePage {
     private var claimed = false, loaded = false, previewSequence = 0
     private var previewTimer: Timer?
     private let idleBox = IdleBox(offersNever: true)
-    private var lightingRow = NSView(), idleArea = NSView(), idleHeight: NSLayoutConstraint?
+    private var idleSection = NSView(), lightingSection = NSView()
     // 0 lit, 1 dimmed, 2 off, as the idle times say; away while the screen is locked or off.
     private var watchTimer: Timer?, idleLevel = 0, watchTicks = 0, watching = false, away = false
     private let effect = NSPopUpButton(), color = NSColorWell(), direction = NSPopUpButton()
     private let speed = NSSlider(value: 50, minValue: 0, maxValue: 100, target: nil, action: nil)
     private let level = NSSlider(value: 100, minValue: 0, maxValue: 100, target: nil, action: nil)
-    private let levelValue = NSTextField(labelWithString: "")
+    private let levelValue = Ui.value(), speedValue = Ui.value()
     private let save = NSButton(title: "Save to keyboard", target: nil, action: nil)
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
-    private var rows: [String: NSGridRow] = [:]
+    private var rows: [String: RowView] = [:]
     private let layout = KeyLayout.load("g515-tkl.json")
     // Game mode through 0x4523 (tried on the G515), in its own view.
     private lazy var game = GameKeys(device, supported: layout != nil, experimental: false)
     private lazy var gameBox: GameModeBox? = layout.flatMap { layout in game.map { GameModeBox(layout: layout, game: $0, page: self) } }
-    private var gameArea = NSView(), lightingBox = NSView(), keysPicture: NSView?
     private let viewPick = NSSegmentedControl(labels: ["Settings", "Game"], trackingMode: .selectOne, target: nil, action: nil)
     private var showingGame = false
     private lazy var picture = layout.map(KeyPicture.init)
@@ -49,7 +48,7 @@ final class KeyboardPage: DevicePage {
     private var setupKey: String { "screen." + device.settingsKey }
     private lazy var screenBox: ScreenBox = {
         let box = ScreenBox(setup: ScreenSettings.fromText(Settings.get(setupKey)), brightness: false, battery: device.has(0x1004),
-                            counts: picture.map { picture in { setup in setup.counts(KeyField.from(picture)) } }) { ScreenSettings.defaults() }
+                            lit: "the keys", pauseFor: "For the live effects and Screen", counts: picture.map { picture in { setup in setup.counts(KeyField.from(picture)) } }) { ScreenSettings.defaults() }
         box.changed = { [weak self] setup in
             guard let self = self else { return }
             Settings.set(self.setupKey, setup.toText())
@@ -64,8 +63,6 @@ final class KeyboardPage: DevicePage {
         }
         return box
     }()
-    // The hint in the title, so the page keeps Windows' height.
-    private lazy var screenArea: NSView = Ui.box(picture == nil ? "Screen" : "Screen: pick an area, then click or drag over keys to give them to it", screenBox)
     private var screening: Bool { current.effect == 0xFE }
     private var directions: [Int] { live ? LiveEffects.directions : KeyboardPage.directions }
 
@@ -73,53 +70,35 @@ final class KeyboardPage: DevicePage {
     override func loadView() {
         effect.addItems(withTitles: effects.map { $0.name })
         intensity.target = self; intensity.action = #selector(changed)
-        intensity.widthAnchor.constraint(equalToConstant: 200).isActive = true
         for control in [effect, direction] as [NSControl] { control.target = self; control.action = #selector(changed) }
+        for popup in [effect, direction] { popup.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true }
         for control in [speed, level] { control.target = self; control.action = #selector(changed); control.isContinuous = true }
         color.target = self; color.action = #selector(changed)
         save.target = self; save.action = #selector(saveClicked); save.keyEquivalent = "\r"
         revert.target = self; revert.action = #selector(revertClicked)
-        levelValue.font = .monospacedDigitSystemFont(ofSize: 0, weight: .regular)
-        levelValue.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        color.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        // 200, so the When idle box fits beside the Lighting box.
-        speed.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        level.widthAnchor.constraint(equalToConstant: 200).isActive = true
-
-        let grid = NSGridView(views: [
-            [Ui.label("Effect"), effect],
-            [Ui.label("Colour"), color],
-            [Ui.label("Speed"), speed],
-            [Ui.label("Intensity"), NSStackView(views: [intensity, intensityValue])],
-            [Ui.label("Direction"), direction],
-            [Ui.label("Brightness"), NSStackView(views: [level, levelValue])],
-        ])
-        grid.column(at: 0).xPlacement = .trailing
-        grid.rowSpacing = 12
-        grid.rowAlignment = .firstBaseline
-        for (i, name) in ["effect", "color", "speed", "intensity", "direction", "level"].enumerated() { rows[name] = grid.row(at: i) }
+        rows["effect"] = Rows.row("Effect", "What the lighting does", effect)
+        rows["color"] = Rows.row("Color", "The effect's color", color)
+        rows["direction"] = Rows.row("Direction", "Which way the effect moves", direction)
+        rows["level"] = Rows.row("Brightness", "How bright the keys are", Rows.slider(level, levelValue))
+        rows["speed"] = Rows.row("Speed", "How fast the effect moves", Rows.slider(speed, speedValue))
+        rows["intensity"] = Rows.row("Intensity", "How strong the effect is", Rows.slider(intensity, intensityValue))
+        let lightRows: [NSView] = [rows["effect"]!] + screenBox.rows
+            + ["color", "direction", "level", "speed", "intensity"].map { rows[$0]! } + screenBox.pauseRows
+        lightingSection = Rows.section("Lighting", lightRows)
 
         viewPick.target = self; viewPick.action = #selector(viewPicked)
         viewPick.selectedSegment = 0
-        keysPicture = picture.map { pictureBox($0) }
-        lightingBox = Ui.box("Lighting", grid)
         idleBox.changed = { [weak self] idle, dim, sleep in
             guard let self = self else { return }
             self.current.idle = idle; self.current.dim = dim; self.current.sleep = sleep
             self.edited()
             self.refresh()
         }
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.init(1), for: .vertical)
-        idleArea = Ui.box("When idle", Ui.column([idleBox, spacer]))
-        let row = NSStackView(views: [lightingBox, idleArea])
-        row.alignment = .top
-        idleHeight = idleArea.heightAnchor.constraint(equalTo: lightingBox.heightAnchor)
-        lightingRow = row
-        if let gameBox = gameBox { gameArea = Ui.box("Game mode", gameBox) }
-        gameArea.isHidden = true
-        view = Ui.page(header: header, body: (keysPicture.map { [$0] } ?? []) + [lightingRow, screenArea, gameArea], status: status,
-                       buttons: [revert, save])
+        idleSection = Rows.section("When idle", idleBox.rows)
+        let sticky = Rows.sticky((picture.map { [$0] } ?? []) + (gameBox.map { [$0.picture] } ?? []))
+        view = Rows.page(header: header, sticky: sticky,
+                         sections: [lightingSection, idleSection] + (gameBox.map { [$0.section] } ?? []),
+                         status: status, buttons: [revert, save])
         runner?.screenSetup = screenBox.setup
         header.show(device)
         Presence.watch()
@@ -138,16 +117,18 @@ final class KeyboardPage: DevicePage {
         rows["color"]?.isHidden = !info.color
         rows["speed"]?.isHidden = !info.speed
         rows["intensity"]?.isHidden = !(live && info.intensity)
-        keysPicture?.isHidden = showingGame
-        lightingRow.isHidden = showingGame
+        picture?.isHidden = showingGame
+        gameBox?.picture.isHidden = !showingGame
+        lightingSection.isHidden = showingGame
         idleBox.show(current, enabled: loaded)
         // A live effect isn't saved, so its idle times wouldn't be either.
-        idleArea.isHidden = live
-        idleHeight?.isActive = !live
-        screenArea.isHidden = !screening || showingGame
+        idleSection.isHidden = live || showingGame
         screenBox.showing(screening && !showingGame)
-        gameArea.isHidden = !showingGame
+        screenBox.pausing(live)
+        gameBox?.section.isHidden = !showingGame
         gameBox?.show()
+        rows["effect"]?.hint.stringValue = picture != nil && screening ? "Pick an area below, then click or drag over keys to give them to it"
+            : "What the lighting does"
         viewPick.selectedSegment = showingGame ? 1 : 0
         rows["direction"]?.isHidden = !info.direction
         intensity.integerValue = current.intensity
@@ -161,6 +142,7 @@ final class KeyboardPage: DevicePage {
         if let i = directions.firstIndex(of: current.direction) { direction.selectItem(at: i) }
         level.integerValue = brightness
         levelValue.stringValue = "\(brightness)%"
+        speedValue.stringValue = info.speed ? "\(speed.integerValue)%" : ""
         let dirty = loaded && (stored == nil || current != stored || brightness != storedBrightness)
         // A live effect runs in G-Lite: the keyboard can't keep it.
         save.isEnabled = dirty && !live

@@ -15,9 +15,8 @@ final class LightPage: DevicePage {
     private var framed: [Int]?
     private let clock = Date()
     private let picture = LightPicture()
-    private let tryNote = Ui.hint("")
-    private let tryButton = NSButton(title: "Try effect", target: nil, action: nil)
-    private var liveBox = NSView()
+    private let tryButton = NSButton(title: "Try", target: nil, action: nil)
+    private var effectRow: RowView!, zoneRow: RowView!, colorRow: RowView!, speedRow: RowView!, tryRow: RowView!, backRows: [RowView] = []
     // The 0x8071 groups and their effects, read at load on a light that has 0x8071; trying while one of them runs.
     private var groups: [[UInt8]]?, trying = false, tried = ""
 
@@ -30,7 +29,7 @@ final class LightPage: DevicePage {
     private var screening: Bool { back && Settings.get(screenKey) == "1" }
     private var setupKey: String { "screen." + device.settingsKey }
     private lazy var screenBox: ScreenBox = {
-        let box = ScreenBox(setup: follower.setup, brightness: false) { ScreenSettings.columns("").zones }
+        let box = ScreenBox(setup: follower.setup, brightness: false, lit: "the light") { ScreenSettings.columns("").zones }
         box.changed = { [weak self] setup in
             guard let self = self else { return }
             Settings.set(self.setupKey, setup.toText())
@@ -39,12 +38,10 @@ final class LightPage: DevicePage {
         }
         return box
     }()
-    private lazy var screenArea: NSView = Ui.box("Screen", screenBox)
     private lazy var follower = ScreenFollower(setup: ScreenSettings.columns(Settings.get(setupKey))) { [weak self] colors in self?.sendScreen(colors) }
     private let zonePicker = NSSegmentedControl(labels: ["All"] + (1...LightState.zones).map { "\($0)" }, trackingMode: .selectOne,
                                                 target: nil, action: nil)
     private let color = NSColorWell()
-    private var speedHead = NSTextField(), zoneHead = Ui.secondary("Zone"), colorHead = Ui.secondary("Colour")
 
     private var rememberedKey: String { "lighting." + device.settingsKey }
 
@@ -63,42 +60,37 @@ final class LightPage: DevicePage {
             control.action = #selector(changed)
         }
         zonePicker.selectedSegment = 0
-        color.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        func row(_ views: [NSView]) -> NSStackView {
-            let stack = NSStackView(views: views)
-            stack.alignment = .top
-            stack.spacing = 24
-            return stack
-        }
-        let front = Ui.column([
-            Ui.toggleRow("On", frontOn),
-            row([Ui.sliderRow("Brightness", lumen, lumenValue, width: 250).0,
-                 Ui.sliderRow("Colour temperature", kelvin, kelvinValue, width: 250).0]),
-        ])
         picture.picked = { [weak self] zone in
             guard let self = self, self.zonePicker.isEnabled else { return }
             self.picked = zone
             self.refresh()
         }
-        tryNote.isHidden = true
-        liveBox = Ui.box("Live on the light", Ui.column([tryNote, picture], spacing: 6))
-        var body = [liveBox, Ui.box("Front light", front)]
+        var sections: [NSView] = [Rows.section("Front light", [
+            Rows.row("Power", "The light facing you", frontOn),
+            Rows.row("Brightness", "In lumens", Rows.slider(lumen, lumenValue)),
+            Rows.row("Color temperature", "Warm to cool, in kelvins", Rows.slider(kelvin, kelvinValue)),
+        ])]
         if back {
-            let (speedRow, head) = Ui.sliderRow("Speed", speed, speedValue, width: 250)
-            speedHead = head
             tryButton.target = self; tryButton.action = #selector(tryMenu)
             tryButton.setAccessibilityLabel("Try the light's own effects")
-            tryButton.isHidden = !device.has(0x8071)
-            let backColumn = Ui.column([
-                row([Ui.toggleRow("On", backOn), tryButton]),
-                row([Ui.sliderRow("Brightness", level, levelValue, width: 250).0, speedRow]),
-                row([Ui.column([Ui.secondary("Effect"), effects], spacing: 4), Ui.column([zoneHead, zonePicker], spacing: 4),
-                     Ui.column([colorHead, color], spacing: 4)]),
-            ])
-            body.append(Ui.box("Back light", backColumn))
+            tryButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+            effectRow = Rows.row("Effect", "What the back light does", effects)
+            zoneRow = Rows.row("Zone", "Click the light to pick one", zonePicker)
+            colorRow = Rows.row("Color", "The picked zone's color", color)
+            speedRow = Rows.row("Speed", "How fast the effect moves", Rows.slider(speed, speedValue))
+            tryRow = Rows.row("Light's own effects", "", tryButton)
+            tryRow.isHidden = !device.has(0x8071)
+            let levelRow = Rows.row("Brightness", "How bright the back light is", Rows.slider(level, levelValue))
+            backRows = [Rows.row("Power", "The colored light at the back", backOn), effectRow]
+            backRows += screenBox.rows
+            backRows += [zoneRow, colorRow, levelRow, speedRow]
+            backRows += screenBox.pauseRows
+            backRows.append(tryRow)
+            sections.append(Rows.section("Back light", backRows))
+            sections.append(Rows.section("Saving", [Rows.note("The light keeps the front light's settings. G-Lite keeps the back light's and "
+                + "sets them again when it starts and when you open this screen. Effects other than Static stop when you quit G-Lite.")]))
         }
-        if back { body.append(screenArea) }
-        view = Ui.page(header: header, body: body, status: status, buttons: [])
+        view = Rows.page(header: header, sticky: picture, sections: sections, status: status, buttons: [])
         header.show(device)
         refresh()
         load()
@@ -376,17 +368,23 @@ final class LightPage: DevicePage {
         zonePicker.isEnabled = zoned
         zonePicker.selectedSegment = picked
         color.isEnabled = zoned
-        Ui.dim(zoneHead, !zoned)
-        Ui.dim(colorHead, !zoned)
         speed.isEnabled = moving
-        Ui.dim(speedHead, !moving)
         speedValue.stringValue = moving ? "\(speed.integerValue)%" : ""
-        if back { screenArea.isHidden = !screening; screenBox.showing(screening) }
-        // The Screen effect has its own box with the screen, so the light's picture goes, as on Windows.
-        liveBox.isHidden = back && screening
-        tryButton.isEnabled = ready && !screening && groups != nil
-        tryNote.stringValue = "Trying \(tried): look at the light"
-        tryNote.isHidden = !trying
+        if !moving { speed.doubleValue = 0 }
+        if back {
+            zoneRow.enable(zoned)
+            colorRow.enable(zoned)
+            speedRow.enable(moving)
+            effectRow.enable(ready)
+            effectRow.hint.stringValue = screening ? "The light follows the screen"
+                : moving ? "Drawn by G-Lite: it stops when you quit G-Lite" : "What the back light does"
+            screenBox.showing(screening)
+            screenBox.pausing(screening)
+            let canTry = ready && !screening && groups != nil
+            tryButton.isEnabled = canTry
+            tryRow.enable(canTry)
+            tryRow.hint.stringValue = trying ? "Trying \(tried): look at the light" : "Experimental: what each one does isn't known yet"
+        }
         if let light = current, light.effect == LightState.staticEffect || screening { show(light.colors) } else if current == nil { show(nil) }
         let animated = back && moving
         if animated && animation == nil {

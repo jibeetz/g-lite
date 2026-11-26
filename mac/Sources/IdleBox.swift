@@ -1,7 +1,7 @@
 import AppKit
 
 // The When idle box (app/KeyboardPage.cs): Dim after, Dim to and Turn off after, a lighting's idle, dim and sleep, saved with it.
-final class IdleBox: NSStackView {
+final class IdleBox: NSObject {
     static let idleSeconds = [0, 15, 30, 60, 120, 300, 600]
     static let idleNames = ["Never", "15 s", "30 s", "1 min", "2 min", "5 min", "10 min"]
     static let dimPercents = [0, 10, 25, 50, 75]
@@ -13,26 +13,25 @@ final class IdleBox: NSStackView {
     // The G915 TKL reads 0 as at once, not never (tried on an owner's keyboard), so the profile keyboards don't offer Never.
     private let never: Int
     var changed: ((_ idle: Int, _ dim: Int, _ sleep: Int) -> Void)?
+    // The When idle section's rows.
+    private(set) var rows: [RowView] = []
 
     init(offersNever: Bool) {
         never = offersNever ? 0 : 1
-        super.init(frame: .zero)
-        orientation = .vertical
-        alignment = .leading
-        spacing = 10
+        super.init()
         dimAfter.addItems(withTitles: Array(IdleBox.idleNames.dropFirst(never)))
         dimTo.addItems(withTitles: IdleBox.dimNames)
         turnOff.addItems(withTitles: Array(IdleBox.sleepNames.dropFirst(never)))
-        for (popup, name) in [(dimAfter, "Dim after"), (dimTo, "Dim to"), (turnOff, "Turn off after")] {
+        for (popup, name, hint) in [(dimAfter, "Dim after", "Time without typing before the keys dim"),
+                                    (dimTo, "Dim to", "How bright the keys stay while dimmed"),
+                                    (turnOff, "Turn off after", "Time without typing before the lighting goes off")] {
             popup.target = self
             popup.action = #selector(picked)
-            popup.widthAnchor.constraint(equalToConstant: 160).isActive = true
+            popup.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true
             popup.setAccessibilityLabel(name)
-            addArrangedSubview(Ui.column([Ui.secondary(name), popup], spacing: 4))
+            rows.append(Rows.row(name, hint, popup))
         }
     }
-
-    required init?(coder: NSCoder) { fatalError() }
 
     static func nearest(_ values: [Int], _ value: Int) -> Int {
         values.indices.min { abs(values[$0] - value) < abs(values[$1] - value) } ?? 0
@@ -45,6 +44,7 @@ final class IdleBox: NSStackView {
         dimAfter.isEnabled = enabled
         dimTo.isEnabled = enabled && lighting.idle > 0
         turnOff.isEnabled = enabled
+        for (row, popup) in zip(rows, [dimAfter, dimTo, turnOff]) { row.enable(popup.isEnabled) }
     }
 
     @objc private func picked() {
