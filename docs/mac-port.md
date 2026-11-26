@@ -104,7 +104,9 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 - **Writes to onboard memory** (G515, G915 family, mice, G9x pages, G300): the same bytes as Windows, compared in the self-test, but
   never sent to a real device from the Mac. A backup is always made first.
 - **Interactions only simulated or not clicked**: the drag rectangle (simulated with synthetic events), Try effect, Test sidetone,
-  the light bar's Per zone switch, the Game view's clicks, the report's Copy and Open GitHub issue.
+  the light bar's Per zone switch, the Game view's clicks, the report's Copy and Open GitHub issue; from the 0.1.0-beta sync, the
+  equalizer's sliders and Flat, the G510's M1 to M3 and its Bindings and Game views, the G560 picture's click (only drawn, in
+  `--snapshot`).
 - **The device report on a real device**: only on the fakes so far. Its first real use is the next step for adding devices.
 
 ## What's left
@@ -120,14 +122,16 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 - Windows 0.1.0-beta lays out every screen in rows (a setting per row under section titles, the picture at the top), has a resizable
   window and an accent colour. The Mac keeps its boxes and fixed window; the features are the same.
-- The MX Keys S's own support is being added on Windows; it comes to the Mac at the next sync.
+- The MX Keys S's own support is being added on Windows (not in 0.1.0-beta); it comes to the Mac at the next sync.
+- The headset's equalizer is a row of vertical sliders, where Windows has a row per band: ten rows don't fit the Mac's page.
 - The click on Windows' G-Lite title opens the games, not the demo; the demo is `--demo` only on Windows, and Demo Mode in the menus on
   the Mac.
 - The slot in use (M1-M3) is checked on load and on the keyboard's events; Windows also checks it when the window comes to the front,
   for a change made while G-Lite was closed.
-- Picking an effect for one zone of a G512 or G513 while a per-key effect runs on All: the per-key effect sets every zone to Off again
+- A click on a zone keyboard's picture doesn't pick its zone (Windows' does); the G560's picture does.
+- Picking an effect for one zone of a G512, G513, G PRO, G410, G810 or G910 while a per-key effect runs on All: the per-key effect sets every zone to Off again
   every 2 s, which overrides that zone (not checked against Windows).
-- The headset screen has no headset picture.
+- The headset screen has no headset picture (Windows draws one above its rows).
 - A device with 0x40A0 and a coarse battery (the K295) gets the other devices' screen instead of Windows' info page with its media keys.
 - When idle is hidden while a live effect runs, since a live effect isn't saved.
 
@@ -140,6 +144,8 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 ## Keeping it in step with Windows
 
+- Last synced with Windows at `21efaea` (0.1.0-beta, 2026-11-25), merged from `csmarvz/g-lite` (`upstream`). The next sync starts
+  from `git log main..upstream/main`.
 - A change to the C# protocol code goes to the same place in the Swift (the file headers say which C# file each one comes from).
 - A new golden-bytes check in `app/SelfTest.cs` gets its twin in `mac/Sources/SelfTest.swift`.
 - The Mac section of `CLAUDE.md` describes each Swift file; keep it up to date, and this file's lists too.
