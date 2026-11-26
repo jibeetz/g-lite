@@ -44,7 +44,7 @@ class FakeHidpp : Hidpp
 
     public FakeHidpp() : base(false) { }
 
-    // The control list (0x1B10) of an owner's G515 TKL, and the Game mode bitmap 0x4523 fn 0 sets.
+    // The control list (0x1B10) of a real G515 TKL, and the Game mode bitmap 0x4523 fn 0 sets.
     public static readonly byte[] ControlList = Hex("014C00EF00F100F300F5014E0150004E010B014401460148014A01420153015600F600F000F200F4014D014F004C004D0143014501470149014B0158017E0116010C01380133013A012A0131015B0118010D013401270129012C015C0169011701320126013501360130015A011E011A012201250128012B012D015D015501190000010E013B01240123012E015F017C010F018B0161018D004F00EC0152011B0000016A01390137012F0160015E0115018C0180017F00340114015100EB000000000000015900000000000000000000000000000000000000000000000000000000018A01850000000000000000000000000000000000000000000000000000");
     public byte[] GameBitmap = new byte[16];
 
@@ -235,7 +235,7 @@ class FakeSpeaker : Hidpp
     }
 }
 
-// A G510s with the feature reports from an owner's report (docs/G510.md).
+// A G510s with the feature reports from its report (docs/G510.md).
 class FakeG510 : Hidpp
 {
     public readonly Dictionary<byte, byte[]> Features = new Dictionary<byte, byte[]>
@@ -361,7 +361,7 @@ class FakeG915 : Hidpp
     public readonly SortedSet<int> GameKeys = new SortedSet<int>();
     public byte[] GameBitmap = new byte[16];
     public byte[][] Ids = { new byte[] { 0x00, 0x01, 0x03, 0x0A }, new byte[] { 0x00, 0x01, 0x0A, 0x03, 0x04, 0x0B, 0x0C } };
-    // Profile 1 of an owner's G915 TKL (Cycle at 10 s on both clusters, power save after 60 s, off after 300 s),
+    // Profile 1 of a real G915 TKL (Cycle at 10 s on both clusters, power save after 60 s, off after 300 s),
     // and its factory copy (Cycle at 5 s).
     public readonly Dictionary<int, byte[]> Sectors = new Dictionary<int, byte[]>
     {
@@ -369,7 +369,7 @@ class FakeG915 : Hidpp
         { 0x101, FakeHidpp.Hex("010000000000000000000000000000000000FFFFFFFFFFFFFFFFFFFF3C002C018002003A8002003B8002003C8002003D8002003E8002003F800200408002004180020042800200438002004480020045900DFF01900DFF02900D0001900D0002900D0003FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0300000000001388640000030000000000138864000003000000000013883200000300000000001388320000FFFFFF") }
     };
     public int Reloads, Power = 1, Running = 1;
-    // 0x8100's button slots: 15 on the owner's G915 TKL (F1-F12, M1-M3), 8 on the G815 (G1-G5, M1-M3).
+    // 0x8100's button slots: 15 on a real G915 TKL (F1-F12, M1-M3), 8 on the G815 (G1-G5, M1-M3).
     public int ButtonSlots = 15;
     public readonly List<byte> Modes = new List<byte> { 1 };
     List<byte> pending = new List<byte>();
@@ -378,7 +378,7 @@ class FakeG915 : Hidpp
     public int Brightness = 80, Claimed;
     public byte Layout = 1;
 
-    // The owner's directory lists profiles 1 to 3 (docs/G815-G915.md). Profiles 2 and 3 are copies of 1 with static red and blue keys.
+    // The real keyboard's directory lists profiles 1 to 3 (docs/G815-G915.md). Profiles 2 and 3 are copies of 1 with static red and blue keys.
     public FakeG915() : base(false)
     {
         var directory = Enumerable.Repeat((byte)0xFF, 255).ToArray();
@@ -529,7 +529,7 @@ class FakeG600 : Hidpp
     }
 }
 
-// A G300: three profiles like those PeriHub's owner read (issue #16), green, blue and off; a DPI shift button on profile 2, Ctrl
+// A G300: three profiles like those read in PeriHub's issue #16, green, blue and off; a DPI shift button on profile 2, Ctrl
 // alone on profile 3's G7. Profile writes are kept, so a save reads back.
 class FakeG300 : Hidpp
 {
@@ -962,21 +962,44 @@ class FakeHeadset : Hidpp
     }
 }
 
-// Answers like the MX Master 3S, MX Keys S and MX Creative Keypad in OpenLogi's captures and the keypad's report:
-// a device only calls the features its FoundDevice lists.
+// Answers like the MX Master 3S, MX Keys S and MX Creative Keypad in OpenLogi's captures and the keypad's report, and the
+// MX Mechanical Mini in its report: a device only calls the features its FoundDevice lists.
 class FakeOther : Hidpp
 {
     static readonly Dictionary<int, byte> Index = new Dictionary<int, byte>
     {
-        { 0x8040, 2 }, { 0x2201, 3 }, { 0x2110, 4 }, { 0x2121, 5 }, { 0x2150, 6 }, { 0x1982, 7 }, { 0x1814, 8 }, { 0x1815, 9 }
+        { 0x8040, 2 }, { 0x2201, 3 }, { 0x2110, 4 }, { 0x2121, 5 }, { 0x2150, 6 }, { 0x1982, 7 }, { 0x1814, 8 }, { 0x1815, 9 }, { 0x4540, 10 }, { 0x40A3, 11 },
+        { 0x4521, 12 }, { 0x1B04, 13 }
     };
+    // 0x1B04: five of the MX Mechanical Mini's controls (docs/mx-key-bindings.md), as Logi Options+ left them: F1 (Easy-Switch, not
+    // divertable), F4, F5, Vol- and Page Up, with F4, Vol- and Page Up diverted.
+    static readonly int[] ControlIds = { 0x00D1, 0x00E2, 0x00E3, 0x00E8, 0x011A };
+    static readonly byte[] ControlFlags = { 0x0A, 0x3A, 0x3A, 0x34, 0x30 };
+    public readonly byte[] Reporting = { 0x00, 0x01, 0x00, 0x01, 0x01 };
     static readonly string[] Names = { "Desk PC", "MacBook" };
-    public int Bright = 100, Dpi = 1000, Shift = 10, Wheel, ThumbInvert, Level = 3, Host;
+    public int Bright = 100, Dpi = 1000, Shift = 10, Wheel, ThumbInvert, Level = 3, Host, Effect, MediaKeys = 1, DisabledKeys;
     public bool RefuseDpi;
-    // An MX Keys S's 0x1982 fn 0, from its owner's report: manual, level 3, fading after 30 s, 30 s and 300 s.
+    // An MX Keys S's 0x1982 fn 0, from its report: manual, level 3, fading after 30 s, 30 s and 300 s.
     public byte[] Backlight = { 0x01, 0x1D, 0x3D, 0x03, 0x00, 0x03, 0x06, 0x00, 0x06, 0x00, 0x3C, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
+    // A Swiss layout, like the MX Mechanical Mini's report.
+    public byte LayoutCode = 0x0D;
+
     public FakeOther() : base(false) { }
+
+    // The MX Mechanical Mini's 0x1982 on firmware 72.00 (v2), from its first report: on, and neither automatic nor set by
+    // software in what it supports.
+    public static readonly byte[] FirstMiniBacklight = { 0x01, 0x05, 0x05, 0x7F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    // The MX Mechanical Mini on firmware 72.03 (v3), from its report: manual, level 7, the seven effects, fading after 10 min.
+    public static FakeOther For(FoundDevice found)
+    {
+        var device = new FakeOther();
+        if (OtherDevice.Picture(found) != "mx-mechanical-mini.json") return device;
+        device.Backlight = new byte[] { 0x01, 0x1D, 0x3D, 0x7F, 0x00, 0x07, 0x78, 0x00, 0x78, 0x00, 0x78, 0x00, 0, 0, 0, 0 };
+        device.Level = 7;
+        return device;
+    }
 
     public override void Dispose() { }
 
@@ -1025,6 +1048,7 @@ class FakeOther : Hidpp
                 if (fn == 1)
                 {
                     Backlight[0] = parameters[0]; Backlight[1] = parameters[1]; Backlight[5] = parameters[3];
+                    if (parameters[2] != 0xFF) Effect = parameters[2];
                     Array.Copy(parameters, 4, Backlight, 6, 6);
                     if ((parameters[1] >> 3 & 3) == 3) Level = parameters[3];
                 }
@@ -1032,10 +1056,36 @@ class FakeOther : Hidpp
                 {
                     reply[0] = 8; reply[1] = (byte)Level;
                     reply[2] = (byte)((Backlight[0] & 1) == 0 ? 0 : (Backlight[1] >> 3 & 3) == 1 ? 2 : 5);
+                    reply[3] = (byte)Effect;
                 }
                 break;
             case 0x1814:
                 if (fn == 0) { reply[0] = 3; reply[1] = (byte)Host; reply[2] = 1; }
+                break;
+            case 0x4540:
+                if (fn == 0) reply[0] = LayoutCode;
+                break;
+            case 0x40A3:
+                if (fn == 1) MediaKeys = parameters[1];
+                reply[0] = parameters[0]; reply[1] = (byte)MediaKeys; reply[2] = 1; reply[3] = 1;
+                break;
+            case 0x1B04:
+                {
+                    if (fn == 0) { reply[0] = (byte)ControlIds.Length; break; }
+                    int control = fn == 1 ? parameters[0] : Array.IndexOf(ControlIds, parameters[0] << 8 | parameters[1]);
+                    reply[0] = (byte)(ControlIds[control] >> 8);
+                    reply[1] = (byte)ControlIds[control];
+                    if (fn == 1) { reply[4] = ControlFlags[control]; reply[8] = 0x04; }
+                    // fn 3: each flag (bits 0, 2, 4, 6) changes only with its valid bit, one above.
+                    if (fn == 3)
+                        for (int flag = 1; flag < 0x100; flag <<= 2)
+                            if ((parameters[2] & flag << 1) != 0) Reporting[control] = (byte)(Reporting[control] & ~flag | parameters[2] & flag);
+                    if (fn == 2 || fn == 3) { reply[2] = Reporting[control]; reply[3] = reply[0]; reply[4] = reply[1]; }
+                    break;
+                }
+            case 0x4521:
+                if (fn == 2) DisabledKeys = parameters[0];
+                reply[0] = (byte)(fn == 0 ? 0x1D : DisabledKeys);
                 break;
             case 0x1815:
                 if (fn == 0) { reply[0] = 0x1F; reply[1] = 0x0E; reply[2] = 3; reply[3] = 0xFF; }

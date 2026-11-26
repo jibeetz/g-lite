@@ -111,14 +111,39 @@ final class FakeG515: Hidpp {
 // An MX Master 3S or MX Keys S, depending on the features its FoundDevice lists, for --demo and the self-test (app/Fake.cs,
 // FakeOther).
 final class FakeOther: Hidpp {
-    static let index: [Int: UInt8] = [0x8040: 2, 0x2201: 3, 0x2110: 4, 0x2121: 5, 0x2150: 6, 0x1982: 7, 0x1814: 8, 0x1815: 9]
+    static let index: [Int: UInt8] = [0x8040: 2, 0x2201: 3, 0x2110: 4, 0x2121: 5, 0x2150: 6, 0x1982: 7, 0x1814: 8, 0x1815: 9, 0x4540: 10,
+                                      0x40A3: 11, 0x4521: 12, 0x1B04: 13]
     static let names = ["Desk PC", "MacBook"]
-    var bright = 100, dpi = 1000, shift = 10, wheel = 0, thumbInvert = 0, level = 3, host = 0
+    var bright = 100, dpi = 1000, shift = 10, wheel = 0, thumbInvert = 0, level = 3, host = 0, effect = 0, mediaKeys = 1, disabledKeys = 0
     var refuseDpi = false
-    // An MX Keys S's 0x1982 fn 0, from its owner's report: manual, level 3, fading after 30 s, 30 s and 300 s.
+    // An MX Keys S's 0x1982 fn 0, from its report: manual, level 3, fading after 30 s, 30 s and 300 s.
     var backlight: [UInt8] = [0x01, 0x1D, 0x3D, 0x03, 0x00, 0x03, 0x06, 0x00, 0x06, 0x00, 0x3C, 0x00, 0x00, 0x00, 0x00, 0x00]
+    // A Swiss layout, like the MX Mechanical Mini's report.
+    var layoutCode: UInt8 = 0x0D
+    // 0x1B04: five of the MX Mechanical Mini's controls (docs/mx-key-bindings.md), as Logi Options+ left them: F1 (Easy-Switch, not
+    // divertable), F4, F5, Vol- and Page Up, with F4, Vol- and Page Up diverted.
+    static let controlIds = [0x00D1, 0x00E2, 0x00E3, 0x00E8, 0x011A]
+    static let controlFlags: [UInt8] = [0x0A, 0x3A, 0x3A, 0x34, 0x30]
+    var reporting: [UInt8] = [0x00, 0x01, 0x00, 0x01, 0x01]
 
     init() { super.init(fake: 0xFF) }
+
+    // The MX Mechanical Mini on firmware 72.03 (v3), from its report: manual, level 7, the seven effects, fading after 10 min.
+    static func make(_ found: FoundDevice) -> FakeOther {
+        let device = FakeOther()
+        if OtherDevice.picture(found) != "mx-mechanical-mini.json" { return device }
+        device.backlight = [0x01, 0x1D, 0x3D, 0x7F, 0x00, 0x07, 0x78, 0x00, 0x78, 0x00, 0x78, 0x00, 0, 0, 0, 0]
+        device.level = 7
+        return device
+    }
+
+    static func mxMini() -> FoundDevice {
+        let device = FoundDevice()
+        device.key = "demo|mxmini"; device.name = "MX Mechanical Mini"; device.kind = "keyboard"; device.link = "Bluetooth"
+        device.battery = 50; device.firmware = "RBK 72.03, build 0014"
+        device.features = [0x0001, 0x0003, 0x0005, 0x1004, 0x1814, 0x1815, 0x1982, 0x40A3, 0x4521, 0x4540]
+        return device
+    }
 
     static func mxMaster() -> FoundDevice {
         let device = FoundDevice()
@@ -130,7 +155,7 @@ final class FakeOther: Hidpp {
     static func mxKeys() -> FoundDevice {
         let device = FoundDevice()
         device.key = "demo|mxkeys"; device.name = "MX Keys S"; device.kind = "keyboard"; device.link = "Bluetooth"; device.battery = 90
-        device.features = [0x0001, 0x0003, 0x0005, 0x1004, 0x1814, 0x1815, 0x1982]
+        device.features = [0x0001, 0x0003, 0x0005, 0x1004, 0x1814, 0x1815, 0x1982, 0x40A3, 0x4521, 0x4540]
         return device
     }
 
@@ -169,13 +194,35 @@ final class FakeOther: Hidpp {
             if fn == 0 { reply = backlight }
             if fn == 1 {
                 backlight[0] = padded[0]; backlight[1] = padded[1]; backlight[5] = padded[3]
+                if padded[2] != 0xFF { effect = Int(padded[2]) }
                 backlight.replaceSubrange(6..<12, with: padded[4..<10])
                 if padded[1] >> 3 & 3 == 3 { level = Int(padded[3]) }
             }
             if fn == 2 {
                 reply[0] = 8; reply[1] = UInt8(level)
                 reply[2] = backlight[0] & 1 == 0 ? 0 : backlight[1] >> 3 & 3 == 1 ? 2 : 5
+                reply[3] = UInt8(effect)
             }
+        case 0x4540:
+            if fn == 0 { reply[0] = layoutCode }
+        case 0x40A3:
+            if fn == 1 { mediaKeys = Int(padded[1]) }
+            reply[0] = padded[0]; reply[1] = UInt8(mediaKeys); reply[2] = 1; reply[3] = 1
+        case 0x1B04:
+            if fn == 0 { reply[0] = UInt8(FakeOther.controlIds.count); break }
+            guard let control = fn == 1 ? Int(padded[0]) : FakeOther.controlIds.firstIndex(of: Int(padded[0]) << 8 | Int(padded[1])) else { break }
+            reply[0] = UInt8(FakeOther.controlIds[control] >> 8); reply[1] = UInt8(FakeOther.controlIds[control] & 0xFF)
+            if fn == 1 { reply[4] = FakeOther.controlFlags[control]; reply[8] = 0x04 }
+            // fn 3: each flag (bits 0, 2, 4, 6) changes only with its valid bit, one above.
+            if fn == 3 {
+                for flag in [0x01, 0x04, 0x10, 0x40] where Int(padded[2]) & flag << 1 != 0 {
+                    reporting[control] = UInt8(Int(reporting[control]) & ~flag | Int(padded[2]) & flag)
+                }
+            }
+            if fn == 2 || fn == 3 { reply[2] = reporting[control]; reply[3] = reply[0]; reply[4] = reply[1] }
+        case 0x4521:
+            if fn == 2 { disabledKeys = Int(padded[0]) }
+            reply[0] = UInt8(fn == 0 ? 0x1D : disabledKeys)
         case 0x1814:
             if fn == 0 { reply[0] = 3; reply[1] = UInt8(host); reply[2] = 1 }
         case 0x1815:

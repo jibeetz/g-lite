@@ -37,7 +37,7 @@ struct DeviceTable {
                     keeps: { $0.has(0x8081) ? "lighting." + $0.settingsKey : "" }),
         DeviceTable(matches: { $0.isG510 }, make: { G510Page(device: $0, hidpp: $1) }, fake: { _ in FakeG510() }, keeps: { "lighting." + $0.settingsKey }),
         DeviceTable(matches: { $0.isHeadset }, make: { HeadsetPage(device: $0, hidpp: $1) }, fake: { _ in FakeHeadset() }),
-        DeviceTable(matches: OtherDevice.supports, make: { OtherPage(device: $0, hidpp: $1) }, fake: { _ in FakeOther() },
+        DeviceTable(matches: OtherDevice.supports, make: { OtherPage(device: $0, hidpp: $1) }, fake: { FakeOther.make($0) },
                     keeps: { "device." + $0.settingsKey }),
     ]
 
@@ -115,6 +115,7 @@ struct DeviceTable {
             FakeLight.found(),
             FakeOther.mxMaster(),
             FakeOther.mxKeys(),
+            FakeOther.mxMini(),
             device("keypad", "MX Creative Keypad", "device", "USB", firmware: "U1 66.00, build 0017", features: base + [0x1B04, 0x8040]),
             device("g305", "G305 Lightspeed Wireless Gaming Mouse", "mouse", "LIGHTSPEED", index: 6, wireless: 0x4074, battery: 90,
                    firmware: "RQM 68.02, build 0021", features: base + [0x1000, 0x1D4B, 0x2201, 0x8060, 0x8070, 0x8100]),

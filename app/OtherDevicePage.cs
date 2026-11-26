@@ -12,6 +12,12 @@ class OtherDevicePage : DevicePage
     OtherSettings current = new OtherSettings(), stored, sent, remembered, rememberedAtLoad;
     OtherDevice.State state;
     bool loading, dirty;
+    volatile bool releasePending;
+    // What the keys given back (ReleaseIfStopped) came to, set on the work queue: the status line until the next change, so the
+    // screen's own read doesn't clear it.
+    volatile string releasedNote;
+    // Set by an Easy-Switch, so the device's return reads it again.
+    volatile bool switched;
     int sequence;
     readonly Timer debounce = new Timer { Interval = 120 };
 
@@ -19,15 +25,44 @@ class OtherDevicePage : DevicePage
     readonly RowLayout rows;
     Slider bright, dpi, shift, level;
     Label brightValue, dpiValue, shiftValue, levelValue;
-    RowText shiftText, autoText, levelText;
-    Toggle shiftOn, invert, thumb, light, auto;
+    RowText shiftText, autoText, levelText, effectText;
+    Toggle shiftOn, invert, thumb, light, auto, saver, mediaKeys;
+    Dropdown effect;
+    readonly Toggle[] disableToggles = new Toggle[OtherDevice.DisableBits.Length];
+    readonly int[] disableRows = new int[OtherDevice.DisableBits.Length];
+    int effectRow, saverRow, mediaKeysRow;
     readonly RowText[] delayTexts = new RowText[3];
     readonly Dropdown[] delayDropdowns = new Dropdown[3];
     SegmentedPicker hosts;
-    RoundedBox hostsBox;
-    const int HostsWidth = 336;
+    RoundedBox hostsBox, backlightBox, keysBox;
+    int autoRow, levelRow;
+    readonly int[] delayRows = new int[3];
+    readonly KeyPicture picture;
+    readonly BacklightPicture backlightPicture;
+    KeyLayout isoModel;
+    bool isoShown, pageShown;
+    const int HostsWidth = 336, PictureHeight = 168;
 
     internal override bool Busy { get { return debounce.Enabled; } }
+
+    protected override bool ReopensWhenFound { get { return switched; } }
+
+    // From the work queue, when the connection opens or the receiver says the device is back.
+    protected override void Opened(Hidpp hidpp)
+    {
+        if (switched && IsHandleCreated) BeginInvoke((Action)(() => { switched = false; Load(); }));
+    }
+
+    // The picture's effect moves only while the screen is shown.
+    public override void Shown() { pageShown = true; base.Shown(); RefreshControls(); }
+
+    public override void Hidden() { pageShown = false; base.Hidden(); RefreshControls(); }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && backlightPicture != null) backlightPicture.Dispose();
+        base.Dispose(disposing);
+    }
 
     string Remembered { get { return "device." + found.SettingsKey; } }
 
@@ -39,15 +74,54 @@ class OtherDevicePage : DevicePage
         debounce.Tick += (sender, e) => { debounce.Stop(); Send(); };
         remembered = OtherSettings.FromText(Settings.Get(Remembered));
         rememberedAtLoad = remembered.Clone();
-        rows = new RowLayout(UseBody().Sheet);
+        var model = OtherDevice.Picture(found);
+        // The picture stays above the rows, which scroll under it. It only shows the backlight, so it takes no clicks.
+        if (model != null)
+        {
+            var ansi = KeyLayout.Load(model);
+            isoModel = ansi.Iso();
+            picture = Ui.Add(this, new KeyPicture(ansi) { Live = true, Enabled = false }, 20, BodyTop, Rows.Width, PictureHeight);
+            backlightPicture = new BacklightPicture(picture);
+        }
+        rows = new RowLayout((picture != null ? UseBody(BodyTop + PictureHeight + 12) : UseBody()).Sheet);
         if (found.Has(0x8040)) Brightness();
         if (found.Has(0x2201)) Pointer();
         if (found.Has(0x2110) || found.Has(0x2111) || found.Has(0x2121)) Wheel();
         if (found.Has(0x2150)) ThumbWheel();
         if (found.Has(0x1982)) Backlight();
+        if (found.Has(0x40A3) || found.Has(0x4521)) KeySettings();
         if (found.Has(0x1814)) EasySwitch();
         RefreshControls();
+        // Keys a stopped Logi Options+ left diverted are given back at the first read, which a screen not shown also makes
+        // (SendsAgain), so the preset it sends again isn't skipped.
+        releasePending = found.Has(0x1B04);
         if (remembered.ToText() != "") Load();
+    }
+
+    protected override bool SendsAgain { get { return base.SendsAgain || releasePending; } }
+
+    // Logi Options+ installed but not running: keys it diverted are dead until the device reconnects. Off in the demo; the traces
+    // replace it.
+    public static Func<bool> OptionsPlusStopped = () => LogitechSoftware.ByIds(new[] { "optionsplus" })[0]
+        .State(LogitechSoftware.RunningProcesses()) == SoftwareState.Stopped;
+
+    // On the work queue. The check lists the PC's processes, so it stays off the UI thread.
+    void ReleaseIfStopped(Hidpp device)
+    {
+        bool stopped;
+        try { stopped = OptionsPlusStopped(); }
+        catch (Exception ex) { Log.Add(DeviceLabel, "error", "Couldn't look for Logi Options+: " + ex.Message); stopped = false; }
+        if (!stopped) return;
+        int released = OtherDevice.ReleaseDiverted(device);
+        if (released > 0) releasedNote = released + (released == 1 ? " key" : " keys") + " Logi Options+ had taken over work again.";
+    }
+
+    // When Settings stops Logi Options+. A device that's away (switched, asleep) fails quietly: it gets its keys back when it
+    // reconnects anyway.
+    public void ReleaseKeys()
+    {
+        if (!found.Has(0x1B04) || switched) return;
+        RunOnDevice(ReleaseIfStopped, () => { if (releasedNote != null) ShowStatus(releasedNote); }, message => { });
     }
 
     void Brightness()
@@ -115,33 +189,73 @@ class OtherDevicePage : DevicePage
     void Backlight()
     {
         Label heading;
-        var box = rows.Section("Backlight", out heading);
+        var box = backlightBox = rows.Section("Backlight", out heading);
         // Plugged in, the MX Keys S's hand sensor seems off: turned on, it stays dark until a key is pressed.
-        // On battery it lights at once (an owner, 2026-11).
+        // On battery it lights at once (tried on a real one, 2026-11). The MX Mechanical Mini does the same plugged in (tried on a real one, 2026-11-26).
         int y = rows.Row(box);
         Rows.Row(box, y, "Backlight", "Plugged in, the keys light up when you next type");
         light = Rows.Toggle(box, y, "Backlight");
         light.Changed += () => Change(OtherSettings.Light, light.Checked ? 1 : 0);
-        y = rows.Row(box);
+        y = autoRow = rows.Row(box);
         autoText = Rows.Row(box, y, "Automatic", "Dims by itself with the room's light");
         auto = Rows.Toggle(box, y, "Automatic");
         auto.Changed += () => Change(OtherSettings.Auto, auto.Checked ? 1 : 0);
-        y = rows.Row(box);
+        y = levelRow = rows.Row(box);
         levelText = Rows.Row(box, y, "Level", "How bright the keys are, when not automatic");
         level = Rows.Slider(box, y, "Level", out levelValue);
         level.Step = 1;
         // Its level shows while Automatic sets it.
         level.ZeroWhenOff = false;
         level.Changed += (sender, e) => Change(OtherSettings.Level, level.Value);
+        y = effectRow = rows.Row(box);
+        effectText = Rows.Row(box, y, "Effect", "Fn and the light key switch it too");
+        effect = Rows.Dropdown(box, y, "Effect");
+        effect.Picked += picked => Change(OtherSettings.Effect, EffectChoices()[picked]);
         string[] names = { "Hands away", "Hands near", "Plugged in" };
         string[] hints = { "Fades after this long without hands near", "Fades after this long with hands near", "Fades after this long, plugged in" };
         for (int index = 0; index < names.Length; index++)
         {
             int setting = OtherSettings.Delays[index];
-            y = rows.Row(box);
+            y = delayRows[index] = rows.Row(box);
             delayTexts[index] = Rows.Row(box, y, names[index], hints[index]);
             delayDropdowns[index] = Rows.Dropdown(box, y, "Fades after, " + names[index].ToLowerInvariant());
             delayDropdowns[index].Picked += picked => Change(setting, DelayChoices(current[setting])[picked]);
+        }
+        y = saverRow = rows.Row(box);
+        Rows.Row(box, y, "Battery saving", "Turns the backlight off below 10% battery");
+        saver = Rows.Toggle(box, y, "Battery saving");
+        saver.Changed += () => Change(OtherSettings.Saver, saver.Checked ? 1 : 0);
+    }
+
+    // The keyboard's own numbers, as Logi Options+ shows them: 0 is off (an MX Mechanical Mini, 2026-11-26).
+    static string LevelText(int value, int levels) { return value + " of " + (levels - 1); }
+
+    int[] EffectChoices()
+    {
+        return OtherDevice.EffectIds.Where(id => state == null || (state.Effects >> id & 1) != 0).ToArray();
+    }
+
+    void KeySettings()
+    {
+        Label heading;
+        keysBox = rows.Section("Keys", out heading);
+        if (found.Has(0x40A3))
+        {
+            int y = mediaKeysRow = rows.Row(keysBox);
+            Rows.Row(keysBox, y, "F1–F12 as media keys", "Off, they type F1–F12. Fn and Esc switch it too");
+            mediaKeys = Rows.Toggle(keysBox, y, "F1–F12 as media keys");
+            mediaKeys.Changed += () => Change(OtherSettings.MediaKeys, mediaKeys.Checked ? 1 : 0);
+        }
+        if (!found.Has(0x4521)) return;
+        for (int index = 0; index < OtherDevice.DisableBits.Length; index++)
+        {
+            int bit = OtherDevice.DisableBits[index];
+            string name = "Disable " + OtherDevice.DisableNames[index];
+            int y = disableRows[index] = rows.Row(keysBox);
+            Rows.Row(keysBox, y, name, "The key does nothing while this is on");
+            var toggle = disableToggles[index] = Rows.Toggle(keysBox, y, name);
+            toggle.Changed += () => Change(OtherSettings.Disabled,
+                toggle.Checked ? current[OtherSettings.Disabled] | bit : current[OtherSettings.Disabled] & ~bit);
         }
     }
 
@@ -181,21 +295,33 @@ class OtherDevicePage : DevicePage
     void Switch(int host)
     {
         LogUserAction("Switch to computer " + (host + 1));
-        RunOnDevice(device => OtherDevice.Switch(device, host),
-            () => ShowStatus("Switched to computer " + (host + 1) + ". Press the Easy-Switch button to come back."));
+        RunOnDevice(device => OtherDevice.Switch(device, host), () =>
+        {
+            // The picker shows where the device is now, until it comes back (Opened) or the page is shown again.
+            switched = true;
+            state.Host = host;
+            hosts.Index = host;
+            hosts.Invalidate();
+            ShowStatus("Switched to computer " + (host + 1) + ". Press the Easy-Switch button to come back.");
+        });
     }
 
     void Change(int setting, int value)
     {
         if (loading || state == null || current[setting] < 0) return;
         current[setting] = value;
-        remembered[setting] = value;
+        if (Remembers(setting)) remembered[setting] = value;
         Changed();
     }
+
+    // The keyboard keeps these and changes them with its own keys (Fn and Esc, Fn and the light key): sent again at each load, they
+    // would undo a change made there.
+    static bool Remembers(int setting) { return setting != OtherSettings.Effect && setting != OtherSettings.MediaKeys; }
 
     void Changed()
     {
         dirty = true;
+        releasedNote = null;
         sequence++;
         Edited();
         RefreshControls();
@@ -260,7 +386,7 @@ class OtherDevicePage : DevicePage
             level.Max = ready && state.Levels > 1 ? state.Levels - 1 : 1;
             level.Value = Math.Max(0, current[OtherSettings.Level]);
             levelText.Enable(manual);
-            levelValue.Text = ready && current[OtherSettings.Level] >= 0 ? current[OtherSettings.Level] + 1 + " of " + state.Levels : "";
+            levelValue.Text = ready && current[OtherSettings.Level] >= 0 ? LevelText(current[OtherSettings.Level], state.Levels) : "";
             bool delays = ready && current[OtherSettings.Away] > 0 && lit;
             for (int index = 0; index < delayDropdowns.Length; index++)
             {
@@ -272,6 +398,51 @@ class OtherDevicePage : DevicePage
                 delayDropdowns[index].Enabled = delays;
                 delayTexts[index].Enable(delays);
             }
+            var effects = EffectChoices();
+            bool hasEffect = ready && current[OtherSettings.Effect] >= 0;
+            effect.Items.Clear();
+            effect.Items.AddRange(effects.Select(id => OtherDevice.EffectNames[Array.IndexOf(OtherDevice.EffectIds, id)]));
+            effect.Index = Array.IndexOf(effects, current[OtherSettings.Effect]);
+            effect.Enabled = hasEffect && lit;
+            effectText.Enable(hasEffect && lit);
+            saver.Enabled = ready && current[OtherSettings.Saver] >= 0;
+            saver.Checked = current[OtherSettings.Saver] == 1;
+            // Once read, the rows the keyboard doesn't have go: on its first firmware, the MX Mechanical Mini's backlight is only on or off.
+            rows.ShowRow(backlightBox, effectRow, !ready || hasEffect);
+            rows.ShowRow(backlightBox, saverRow, !ready || current[OtherSettings.Saver] >= 0);
+            rows.ShowRow(backlightBox, autoRow, !ready || current[OtherSettings.Auto] >= 0);
+            rows.ShowRow(backlightBox, levelRow, !ready || current[OtherSettings.Level] >= 0);
+            foreach (int row in delayRows) rows.ShowRow(backlightBox, row, !ready || current[OtherSettings.Away] > 0);
+        }
+        if (keysBox != null)
+        {
+            if (mediaKeys != null)
+            {
+                mediaKeys.Enabled = ready && current[OtherSettings.MediaKeys] >= 0;
+                mediaKeys.Checked = current[OtherSettings.MediaKeys] == 1;
+                rows.ShowRow(keysBox, mediaKeysRow, !ready || current[OtherSettings.MediaKeys] >= 0);
+            }
+            for (int index = 0; index < disableToggles.Length; index++)
+            {
+                if (disableToggles[index] == null) continue;
+                bool can = ready && current[OtherSettings.Disabled] >= 0 && (state.Disableable & OtherDevice.DisableBits[index]) != 0;
+                disableToggles[index].Enabled = can;
+                disableToggles[index].Checked = can && (current[OtherSettings.Disabled] & OtherDevice.DisableBits[index]) != 0;
+                rows.ShowRow(keysBox, disableRows[index], !ready || can);
+            }
+            rows.ShowSection(keysBox, !ready || current[OtherSettings.MediaKeys] >= 0 || current[OtherSettings.Disabled] >= 0);
+        }
+        if (picture != null)
+        {
+            if (!isoShown && isoModel != null && ready && KeyLayout.IsIso(state.LayoutCode))
+            {
+                isoShown = true;
+                picture.SetModel(isoModel);
+            }
+            // As bright as the level (0 is off); full when the keyboard has no levels.
+            int shownLevel = current[OtherSettings.Level];
+            double brightness = ready && shownLevel >= 0 && state.Levels > 1 ? shownLevel / (double)(state.Levels - 1) : 1;
+            backlightPicture.Show(ready && current[OtherSettings.Light] == 1, brightness, current[OtherSettings.Effect], pageShown);
         }
         if (hosts != null)
         {
@@ -315,7 +486,7 @@ class OtherDevicePage : DevicePage
         if (state == null) return;
         var preset = OtherDevice.KeepSupported(OtherSettings.FromText(text), state);
         for (int setting = 0; setting < OtherSettings.Count; setting++)
-            if (preset[setting] >= 0 && preset[setting] != current[setting]) remembered[setting] = preset[setting];
+            if (preset[setting] >= 0 && preset[setting] != current[setting] && Remembers(setting)) remembered[setting] = preset[setting];
         current.Merge(preset);
         Changed();
     }
@@ -332,7 +503,7 @@ class OtherDevicePage : DevicePage
 
     protected override void ClearStatus()
     {
-        ShowStatus(state != null && dirty ? "Applied to the " + Noun + "." : "");
+        ShowStatus(state != null && dirty ? "Applied to the " + Noun + "." : releasedNote ?? "");
     }
 
     // A refused setting goes back to what the device has, and isn't remembered or sent again.
@@ -372,6 +543,7 @@ class OtherDevicePage : DevicePage
         int startedAt = sequence;
         RunOnDevice(device =>
         {
+            if (releasePending) { releasePending = false; ReleaseIfStopped(device); }
             read = OtherDevice.Read(device, found);
             before = read.Set.Clone();
             var want = read.Set.Clone();
@@ -397,5 +569,118 @@ class OtherDevicePage : DevicePage
             if (refused != null && refused.Count > 0) Refused(refused, before);
             rememberedAtLoad = remembered.Clone();
         });
+    }
+}
+
+// An MX keyboard's backlight on its picture: white, as bright as the level, with the keyboard's effect, as seen on an MX Mechanical
+// Mini (2026-11-26): Contrast dims the letters, digits, F1–F4, F9–F12 and the arrows, Breathing fades all the keys in and out, Waves sweep from left to right,
+// Reaction lights a key when it's pressed, Random lights keys at random. The speeds are guesses. Only while the screen is shown:
+// Reaction's key presses come from a hook (KeyPresses) that's removed when it stops.
+class BacklightPicture : IDisposable
+{
+    const int Contrast = 3, Breathing = 2, Waves = 6, Reaction = 4, Random = 5;
+    const double BreathSeconds = 4, WaveSeconds = 3, FadeSeconds = 1, TwinkleSeconds = 1.5, ContrastDim = 0.35;
+    readonly KeyPicture picture;
+    readonly Timer timer = new Timer { Interval = 40 };
+    readonly System.Random random = new System.Random();
+    readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+    KeyPresses presses;
+    // When each key last lit up, for Reaction and Random.
+    double[] litAt = new double[0];
+    bool lit;
+    double brightness;
+    int effect;
+
+    public BacklightPicture(KeyPicture picture)
+    {
+        this.picture = picture;
+        timer.Tick += (s, e) => Tick();
+    }
+
+    // Minimizing doesn't hide the screen (Hidden), so the ticks idle meanwhile, and Reaction's hook goes until it's back.
+    void Tick()
+    {
+        var form = picture.FindForm();
+        bool minimized = form != null && form.WindowState == FormWindowState.Minimized;
+        if (minimized && presses != null) { presses.Dispose(); presses = null; }
+        if (minimized) return;
+        if (effect == Reaction && presses == null) presses = new KeyPresses();
+        Draw();
+    }
+
+    public void Show(bool on, double level, int newEffect, bool shown)
+    {
+        lit = on;
+        brightness = level;
+        effect = newEffect;
+        bool moving = shown && on && (effect == Breathing || effect == Waves || effect == Reaction || effect == Random);
+        if (moving && !timer.Enabled) timer.Start();
+        if (!moving) timer.Stop();
+        if (moving && effect == Reaction && presses == null) presses = new KeyPresses();
+        if (!(moving && effect == Reaction) && presses != null) { presses.Dispose(); presses = null; }
+        Draw();
+    }
+
+    void Draw()
+    {
+        double seconds = clock.Elapsed.TotalSeconds;
+        if (litAt.Length != picture.Count) litAt = Enumerable.Repeat(-1000.0, picture.Count).ToArray();
+        if (presses != null)
+            foreach (int usage in presses.Take())
+            {
+                int key = KeyOf(usage);
+                // Scan code 2B is \ on ANSI keyboards and # on ISO ones (as Echo does).
+                if (key < 0 && usage == 0x31) key = KeyOf(0x32);
+                if (key >= 0) litAt[key] = seconds;
+            }
+        var colors = new Color[picture.Count];
+        for (int key = 0; key < colors.Length; key++)
+            colors[key] = Ui.Mix(Theme.KeyOff, Color.White, lit ? brightness * Math.Max(0, Math.Min(1, Factor(key, seconds))) : 0);
+        picture.ShowLive(colors, new bool[colors.Length]);
+    }
+
+    int KeyOf(int usage)
+    {
+        int id = GameModeKeys.LightingId(usage);
+        for (int key = 0; key < picture.Count; key++) if (id >= 0 && picture.IdOf(key) == id) return key;
+        return -1;
+    }
+
+    // The key's share of the level, 0 to 1.
+    double Factor(int key, double seconds)
+    {
+        switch (effect)
+        {
+            case Contrast:
+                int id = picture.IdOf(key);
+                // Dim, as on the Mini: letters and digits (lighting ids 01–24), the punctuation among them (2A–35 but `, and ISO's <>,
+                // 61), F1–F4 and F9–F12 (37–3A, 3F–42) and the arrows (4C–4F).
+                bool dim = (id >= 0x01 && id <= 0x24) || (id >= 0x2A && id <= 0x35 && id != 0x32) || id == 0x61
+                    || (id >= 0x37 && id <= 0x3A) || (id >= 0x3F && id <= 0x42) || (id >= 0x4C && id <= 0x4F);
+                return dim ? ContrastDim : 1;
+            case Breathing:
+                return 0.5 - 0.5 * Math.Cos(2 * Math.PI * seconds / BreathSeconds);
+            case Waves:
+                return 0.5 + 0.5 * Math.Cos(2 * Math.PI * (picture.XOf(key) - seconds / WaveSeconds));
+            case Reaction:
+                return 1 - (seconds - litAt[key]) / FadeSeconds;
+            case Random:
+                double age = seconds - litAt[key];
+                // About one key in six lit at a time.
+                if (age >= TwinkleSeconds && random.NextDouble() < timer.Interval / 1000.0 / TwinkleSeconds / 5)
+                {
+                    litAt[key] = seconds;
+                    age = 0;
+                }
+                return age < TwinkleSeconds ? Math.Sin(Math.PI * age / TwinkleSeconds) : 0;
+            default:
+                return 1;
+        }
+    }
+
+    public void Dispose()
+    {
+        timer.Dispose();
+        if (presses != null) presses.Dispose();
     }
 }

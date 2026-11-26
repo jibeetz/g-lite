@@ -85,6 +85,12 @@ size (868 x 730).
 20. **Rows layout** (`Rows.swift`, from `app/Rows.cs`): every device screen and Settings, the device's picture above the rows
     (headset, keyboards, mice, Litra, G560, G510); the Screen effect's rows after Effect while it runs; the Game view's picture in the
     sticky place; the G keys, mouse buttons and When idle a row each; the equalizer a row per band.
+21. **Sync with Windows' MX keyboards** (2026-11-26): the MX Mechanical Mini and MX Keys S drawn with their backlight (level and
+    effect), the backlight's effect and battery saving, F1–F12 as media keys (0x40A3, this computer's Easy-Switch index), disabled keys
+    (0x4521), keys a stopped Logi Options+ left diverted given back (0x1B04), levels numbered 0 to 7, rows a keyboard doesn't have hidden
+    once read, the Easy-Switch picker showing where the device went and the device read again when it comes back; the reports read
+    0x40A3, 0x4521 and 0x1B04 fn 2; the ISO picture built from any \, Enter and Shift width; the demo's Mini. Windows' Logi Options+ row in
+    Settings' Services isn't ported (the Mac has no Services box); the Mac looks for Logi Options+ by its app and process name.
 
 ## Tested on real devices
 
@@ -125,7 +131,6 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 - Windows' resizable window and accent colour aren't planned: macOS has its own accent colour, and the rows scroll.
 - Some rows keep Mac controls: effects, stages and rates as segmented controls where Windows has dropdowns, the colour as a colour
   well where Windows has swatches; the G560's Screen effect has its own Brightness row, where Windows shares the lighting's.
-- The MX Keys S's own support is being added on Windows (not in 0.1.0-beta); it comes to the Mac at the next sync.
 - The click on Windows' G-Lite title opens the games, not the demo; the demo is `--demo` only on Windows, and Demo Mode in the menus on
   the Mac.
 - The slot in use (M1-M3) is checked on load and on the keyboard's events; Windows also checks it when the window comes to the front,
@@ -145,7 +150,7 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 ## Keeping it in step with Windows
 
-- Last synced with Windows at `21efaea` (0.1.0-beta, 2026-11-25), merged from `csmarvz/g-lite` (`upstream`). The next sync starts
+- Last synced with Windows at `1a8eebb` (the MX keyboards, 2026-11-26), merged from `csmarvz/g-lite` (`upstream`). The next sync starts
   from `git log main..upstream/main`.
 - A change to the C# protocol code goes to the same place in the Swift (the file headers say which C# file each one comes from).
 - A new golden-bytes check in `app/SelfTest.cs` gets its twin in `mac/Sources/SelfTest.swift`.

@@ -14,8 +14,21 @@ final class OtherPage: DevicePage {
     private var bright: NSSlider?, dpi: NSSlider?, shift: NSSlider?, level: NSSlider?
     private var brightValue = Ui.value(), dpiValue = Ui.value(), shiftValue = Ui.value(), levelValue = Ui.value()
     private var shiftRow: RowView?, autoRow: RowView?, levelRow: RowView?, delayRows: [RowView] = []
-    private var shiftOn: NSSwitch?, invert: NSSwitch?, thumb: NSSwitch?, light: NSSwitch?, auto: NSSwitch?
+    private var effectRow: RowView?, saverRow: RowView?, mediaKeysRow: RowView?, disableRows: [RowView?] = []
+    private var shiftOn: NSSwitch?, invert: NSSwitch?, thumb: NSSwitch?, light: NSSwitch?, auto: NSSwitch?, saver: NSSwitch?, mediaKeys: NSSwitch?
+    private var disableToggles: [NSSwitch?] = []
     private var delays: [NSPopUpButton] = []
+    private let effect = NSPopUpButton()
+    private var keysSection: NSView?
+    // An MX keyboard's picture, showing its backlight (OtherDevice.picture); the ISO one once 0x4540 says so.
+    private lazy var picture: KeyPicture? = OtherDevice.picture(device).flatMap(KeyLayout.load).map(KeyPicture.init)
+    private lazy var isoModel = OtherDevice.picture(device).flatMap(KeyLayout.load)?.iso()
+    private lazy var backlightPicture = picture.map(BacklightPicture.init)
+    private var isoShown = false, pageShown = false
+    // Keys a stopped Logi Options+ left diverted are given back at the first read; what came of it shows on the status line.
+    private var releasePending = false, releasedNote: String?
+    // Set by an Easy-Switch, so the device's return reads it again.
+    private var switched = false
     private var hosts: NSSegmentedControl?, hostsBox: NSView?
     private let revert = NSButton(title: "Revert", target: nil, action: nil)
 
@@ -37,10 +50,12 @@ final class OtherPage: DevicePage {
         if device.has(0x2110) || device.has(0x2111) || device.has(0x2121) { sections.append(wheelSection()) }
         if device.has(0x2150) { sections.append(thumbSection()) }
         if device.has(0x1982) { sections.append(backlightSection()) }
+        if device.has(0x40A3) || device.has(0x4521) { let section = keysSectionView(); keysSection = section; sections.append(section) }
         if device.has(0x1814) { let section = easySwitchSection(); hostsBox = section; sections.append(section) }
+        releasePending = device.has(0x1B04)
         revert.target = self
         revert.action = #selector(revertClicked)
-        view = Rows.page(header: header, sticky: nil, sections: sections, status: status, buttons: [revert])
+        view = Rows.page(header: header, sticky: picture, sections: sections, status: status, buttons: [revert])
         header.show(device)
         refresh()
         load()
@@ -100,7 +115,10 @@ final class OtherPage: DevicePage {
         var rows: [NSView] = [Rows.row("Backlight", "Plugged in, the keys light up when you next type", lightToggle)]
         autoRow = Rows.row("Automatic", "Dims by itself with the room's light", autoToggle)
         levelRow = Rows.row("Level", "How bright the keys are, when not automatic", Rows.slider(slider, levelValue))
-        rows += [autoRow!, levelRow!]
+        effect.target = self; effect.action = #selector(effectPicked)
+        effect.widthAnchor.constraint(equalToConstant: Rows.controlWidth).isActive = true
+        effectRow = Rows.row("Effect", "Fn and the light key switch it too", effect)
+        rows += [autoRow!, levelRow!, effectRow!]
         let hints = ["Fades after this long without hands near", "Fades after this long with hands near", "Fades after this long, plugged in"]
         for (index, name) in ["Hands away", "Hands near", "Plugged in"].enumerated() {
             let popup = NSPopUpButton()
@@ -114,7 +132,46 @@ final class OtherPage: DevicePage {
             delayRows.append(row)
             rows.append(row)
         }
+        let saverToggle = Ui.toggle(self, #selector(saverToggled))
+        saver = saverToggle
+        saverRow = Rows.row("Battery saving", "Turns the backlight off below 10% battery", saverToggle)
+        rows.append(saverRow!)
         return Rows.section("Backlight", rows)
+    }
+
+    private func keysSectionView() -> NSView {
+        var rows: [NSView] = []
+        if device.has(0x40A3) {
+            let toggle = Ui.toggle(self, #selector(mediaKeysToggled))
+            mediaKeys = toggle
+            mediaKeysRow = Rows.row("F1–F12 as media keys", "Off, they type F1–F12. Fn and Esc switch it too", toggle)
+            rows.append(mediaKeysRow!)
+        }
+        if device.has(0x4521) {
+            for (index, name) in OtherDevice.disableNames.enumerated() {
+                let toggle = Ui.toggle(self, #selector(disableToggled))
+                toggle.tag = index
+                toggle.setAccessibilityLabel("Disable " + name)
+                let row = Rows.row("Disable " + name, "The key does nothing while this is on", toggle)
+                disableToggles.append(toggle)
+                disableRows.append(row)
+                rows.append(row)
+            }
+        }
+        return Rows.section("Keys", rows)
+    }
+
+    private var effectChoices: [Int] { OtherDevice.effectIds.filter { id in state.map { $0.effects >> id & 1 != 0 } ?? true } }
+
+    // The keyboard's own numbers, as Logi Options+ shows them: 0 is off (an MX Mechanical Mini, 2026-11-26).
+    static func levelText(_ value: Int, _ levels: Int) -> String { "\(value) of \(levels - 1)" }
+
+    override func viewWillAppear() { super.viewWillAppear(); pageShown = true; refresh() }
+    override func viewDidDisappear() { super.viewDidDisappear(); pageShown = false; refresh() }
+
+    // After an Easy-Switch, the device's return (a scan that finds it again) reads it again.
+    override func scanned() {
+        if switched { switched = false; load() }
     }
 
     private func easySwitchSection() -> NSView {
@@ -135,6 +192,16 @@ final class OtherPage: DevicePage {
     @objc private func thumbToggled() { change(OtherSettings.thumb, thumb!.state == .on ? 1 : 0) }
     @objc private func lightToggled() { change(OtherSettings.light, light!.state == .on ? 1 : 0) }
     @objc private func autoToggled() { change(OtherSettings.auto, auto!.state == .on ? 1 : 0) }
+    @objc private func effectPicked() {
+        let choices = effectChoices
+        if effect.indexOfSelectedItem >= 0 && effect.indexOfSelectedItem < choices.count { change(OtherSettings.effect, choices[effect.indexOfSelectedItem]) }
+    }
+    @objc private func saverToggled() { change(OtherSettings.saver, saver!.state == .on ? 1 : 0) }
+    @objc private func mediaKeysToggled() { change(OtherSettings.mediaKeys, mediaKeys!.state == .on ? 1 : 0) }
+    @objc private func disableToggled(_ sender: NSSwitch) {
+        let bit = OtherDevice.disableBits[sender.tag]
+        change(OtherSettings.disabled, sender.state == .on ? current[OtherSettings.disabled] | bit : current[OtherSettings.disabled] & ~bit)
+    }
     @objc private func levelChanged() { change(OtherSettings.level, level!.integerValue) }
     @objc private func delayPicked(_ sender: NSPopUpButton) {
         let setting = OtherSettings.delays[sender.tag]
@@ -144,7 +211,8 @@ final class OtherPage: DevicePage {
     private func change(_ setting: Int, _ value: Int) {
         if refreshing || state == nil || current[setting] < 0 { return }
         current[setting] = value
-        remembered[setting] = value
+        if OtherPage.remembers(setting) { remembered[setting] = value }
+        releasedNote = nil
         changed()
     }
 
@@ -163,7 +231,11 @@ final class OtherPage: DevicePage {
         }
     }
 
-    private func showApplied() { status.show(state != nil && dirty ? "Applied to the \(noun)." : "") }
+    // The keyboard keeps these and changes them with its own keys (Fn and Esc, Fn and the light key): sent again at each load, they
+    // would undo a change made there.
+    static func remembers(_ setting: Int) -> Bool { setting != OtherSettings.effect && setting != OtherSettings.mediaKeys }
+
+    private func showApplied() { status.show(state != nil && dirty ? "Applied to the \(noun)." : releasedNote ?? "") }
 
     @objc private func hostPicked() {
         guard let state = state, let hosts = hosts else { return }
@@ -184,8 +256,13 @@ final class OtherPage: DevicePage {
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
             self.logAction("Switch to computer \(host + 1)")
-            self.run({ try OtherDevice.switchTo($0, host) },
-                     done: { self.status.show("Switched to computer \(host + 1). Press the Easy-Switch button to come back.") })
+            self.run({ try OtherDevice.switchTo($0, host) }, done: {
+                // The picker shows where the device is now, until it comes back (scanned) or is read again.
+                self.switched = true
+                self.state?.host = host
+                self.hosts?.selectedSegment = host
+                self.status.show("Switched to computer \(host + 1). Press the Easy-Switch button to come back.")
+            })
         }
     }
 
@@ -195,7 +272,9 @@ final class OtherPage: DevicePage {
     override func applyPreset(_ text: String) {
         guard let state = state else { return }
         let preset = OtherDevice.keepSupported(OtherSettings.fromText(text), state)
-        for setting in 0..<OtherSettings.count where preset[setting] >= 0 && preset[setting] != current[setting] { remembered[setting] = preset[setting] }
+        for setting in 0..<OtherSettings.count where preset[setting] >= 0 && preset[setting] != current[setting] && OtherPage.remembers(setting) {
+            remembered[setting] = preset[setting]
+        }
         current.merge(preset)
         changed()
     }
@@ -250,7 +329,10 @@ final class OtherPage: DevicePage {
         let keep = remembered, found = device
         var read: OtherDevice.State?, before = OtherSettings(), refused: [Int] = []
         let startedAt = sequence
+        let release = releasePending
+        releasePending = false
         run({ device in
+            if release { self.releaseIfStopped(device) }
             var state = try OtherDevice.read(device, found)
             before = state.set
             var want = state.set
@@ -273,11 +355,32 @@ final class OtherPage: DevicePage {
                 self.dirty = false
             }
             self.refresh()
-            self.status.show("")
+            self.status.show(self.releasedNote ?? "")
             if !refused.isEmpty { self.refused(refused, before) }
             self.rememberedAtLoad = self.remembered
             self.loaded()
         })
+    }
+
+    // Logi Options+ installed but not running: keys it diverted are dead until the device reconnects. Off in the demo.
+    // shortcut: looks for the app in /Applications and its processes by name (logioptionsplus); Windows asks its service manager.
+    static var optionsPlusStopped: () -> Bool = {
+        guard FileManager.default.fileExists(atPath: "/Applications/logioptionsplus.app") else { return false }
+        let check = Process()
+        check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        check.arguments = ["-i", "logioptionsplus"]
+        check.standardOutput = FileHandle.nullDevice
+        guard (try? check.run()) != nil else { return false }
+        check.waitUntilExit()
+        return check.terminationStatus != 0
+    }
+
+    // On the device's queue, since the check runs a process.
+    private func releaseIfStopped(_ device: Hidpp) {
+        if self.device.key.hasPrefix("demo|") || !OtherPage.optionsPlusStopped() { return }
+        guard let released = try? OtherDevice.releaseDiverted(device), released > 0 else { return }
+        let note = "\(released) " + (released == 1 ? "key" : "keys") + " Logi Options+ had taken over work again."
+        DispatchQueue.main.async { self.releasedNote = note }
     }
 
     // ---- showing ----
@@ -332,7 +435,21 @@ final class OtherPage: DevicePage {
             level.maxValue = Double(ready && state!.levels > 1 ? state!.levels - 1 : 1)
             level.integerValue = max(0, current[OtherSettings.level])
             levelRow?.enable(manual)
-            levelValue.stringValue = ready && current[OtherSettings.level] >= 0 ? "\(current[OtherSettings.level] + 1) of \(state!.levels)" : ""
+            levelValue.stringValue = ready && current[OtherSettings.level] >= 0 ? OtherPage.levelText(current[OtherSettings.level], state!.levels) : ""
+            let choices = effectChoices, hasEffect = ready && current[OtherSettings.effect] >= 0
+            effect.removeAllItems()
+            effect.addItems(withTitles: choices.map { OtherDevice.effectNames[OtherDevice.effectIds.firstIndex(of: $0)!] })
+            effect.selectItem(at: choices.firstIndex(of: current[OtherSettings.effect]) ?? -1)
+            effect.isEnabled = hasEffect && lit
+            effectRow?.enable(hasEffect && lit)
+            saver?.isEnabled = ready && current[OtherSettings.saver] >= 0
+            saver?.state = current[OtherSettings.saver] == 1 ? .on : .off
+            // Once read, the rows the keyboard doesn't have go: on its first firmware, the MX Mechanical Mini's backlight is only on or off.
+            effectRow?.isHidden = ready && !hasEffect
+            saverRow?.isHidden = ready && current[OtherSettings.saver] < 0
+            autoRow?.isHidden = ready && current[OtherSettings.auto] < 0
+            levelRow?.isHidden = ready && current[OtherSettings.level] < 0
+            for row in delayRows { row.isHidden = ready && current[OtherSettings.away] <= 0 }
             let fades = ready && current[OtherSettings.away] > 0 && lit
             for (index, popup) in delays.enumerated() {
                 let seconds = current[OtherSettings.delays[index]]
@@ -343,6 +460,29 @@ final class OtherPage: DevicePage {
                 popup.isEnabled = fades
                 delayRows[index].enable(fades)
             }
+        }
+        if let mediaKeys = mediaKeys {
+            mediaKeys.isEnabled = ready && current[OtherSettings.mediaKeys] >= 0
+            mediaKeys.state = current[OtherSettings.mediaKeys] == 1 ? .on : .off
+            mediaKeysRow?.isHidden = ready && current[OtherSettings.mediaKeys] < 0
+        }
+        for (index, toggle) in disableToggles.enumerated() {
+            let can = ready && current[OtherSettings.disabled] >= 0 && state!.disableable & OtherDevice.disableBits[index] != 0
+            toggle?.isEnabled = can
+            toggle?.state = can && current[OtherSettings.disabled] & OtherDevice.disableBits[index] != 0 ? .on : .off
+            disableRows[index]?.isHidden = ready && !can
+        }
+        keysSection?.isHidden = ready && current[OtherSettings.mediaKeys] < 0 && current[OtherSettings.disabled] < 0
+        if let picture = picture {
+            if !isoShown, let iso = isoModel, ready, KeyLayout.isIso(state!.layoutCode) {
+                isoShown = true
+                picture.setLayout(iso)
+            }
+            // As bright as the level (0 is off); full when the keyboard has no levels.
+            let shownLevel = current[OtherSettings.level]
+            let brightness = ready && shownLevel >= 0 && state!.levels > 1 ? Double(shownLevel) / Double(state!.levels - 1) : 1
+            backlightPicture?.show(on: ready && current[OtherSettings.light] == 1, level: brightness, effect: current[OtherSettings.effect],
+                                   shown: pageShown)
         }
         if let hosts = hosts {
             let count = state?.hosts ?? 0
@@ -372,5 +512,84 @@ final class OtherPage: DevicePage {
 
     static func delayText(_ seconds: Int) -> String {
         seconds % 3600 == 0 ? "\(seconds / 3600) h" : seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds) s"
+    }
+}
+
+// An MX keyboard's backlight on its picture (app/OtherDevicePage.cs, BacklightPicture): white, as bright as the level, with the
+// keyboard's effect, as seen on an MX Mechanical Mini (2026-11-26): Contrast dims the letters, digits, F1–F4, F9–F12 and the arrows,
+// Breathing fades all the keys in and out, Waves sweep from left to right, Reaction lights a key when it's pressed, Random lights keys
+// at random. The speeds are guesses. Only while the screen is shown: Reaction's key presses come from an event tap, stopped with it.
+final class BacklightPicture {
+    private static let contrast = 3, breathing = 2, waves = 6, reaction = 4, random = 5
+    private static let breathSeconds = 4.0, waveSeconds = 3.0, fadeSeconds = 1.0, twinkleSeconds = 1.5, contrastDim = 0.35, tick = 0.04
+    private let picture: KeyPicture
+    private var timer: Timer?
+    private var presses: KeyPresses?
+    private let clock = Date()
+    // When each key last lit up, for Reaction and Random.
+    private var litAt: [Double] = []
+    private var lit = false, brightness = 0.0, effect = 0
+
+    init(_ picture: KeyPicture) { self.picture = picture }
+
+    deinit { timer?.invalidate(); presses?.stop() }
+
+    func show(on: Bool, level: Double, effect newEffect: Int, shown: Bool) {
+        lit = on
+        brightness = level
+        effect = newEffect
+        let moving = shown && on && [BacklightPicture.breathing, BacklightPicture.waves, BacklightPicture.reaction, BacklightPicture.random].contains(effect)
+        if moving && timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: BacklightPicture.tick, repeats: true) { [weak self] _ in self?.draw() }
+        }
+        if !moving { timer?.invalidate(); timer = nil }
+        if moving && effect == BacklightPicture.reaction && presses == nil { presses = KeyPresses() }
+        if !(moving && effect == BacklightPicture.reaction) { presses?.stop(); presses = nil }
+        draw()
+    }
+
+    private func draw() {
+        let seconds = Date().timeIntervalSince(clock)
+        if litAt.count != picture.count { litAt = [Double](repeating: -1000, count: picture.count) }
+        for usage in presses?.take() ?? [] {
+            var key = keyOf(usage)
+            // Scan code 2B is \ on ANSI keyboards and # on ISO ones (as Echo does).
+            if key < 0 && usage == 0x31 { key = keyOf(0x32) }
+            if key >= 0 { litAt[key] = seconds }
+        }
+        picture.show((0..<picture.count).map { key in
+            let value = Int(255 * (lit ? brightness * max(0, min(1, factor(key, seconds))) : 0))
+            return value << 16 | value << 8 | value
+        })
+    }
+
+    private func keyOf(_ usage: Int) -> Int {
+        let id = KeyPresses.lightingId(usage)
+        return id < 0 ? -1 : (0..<picture.count).first { picture.idOf($0) == id } ?? -1
+    }
+
+    // The key's share of the level, 0 to 1.
+    private func factor(_ key: Int, _ seconds: Double) -> Double {
+        switch effect {
+        case BacklightPicture.contrast:
+            let id = picture.idOf(key)
+            // Dim, as on the Mini: letters and digits (lighting ids 01–24), the punctuation among them (2A–35 but `, and ISO's <>, 61),
+            // F1–F4 and F9–F12 (37–3A, 3F–42) and the arrows (4C–4F).
+            let dim = (0x01...0x24).contains(id) || ((0x2A...0x35).contains(id) && id != 0x32) || id == 0x61
+                || (0x37...0x3A).contains(id) || (0x3F...0x42).contains(id) || (0x4C...0x4F).contains(id)
+            return dim ? BacklightPicture.contrastDim : 1
+        case BacklightPicture.breathing: return 0.5 - 0.5 * cos(2 * Double.pi * seconds / BacklightPicture.breathSeconds)
+        case BacklightPicture.waves: return 0.5 + 0.5 * cos(2 * Double.pi * (picture.xOf(key) - seconds / BacklightPicture.waveSeconds))
+        case BacklightPicture.reaction: return 1 - (seconds - litAt[key]) / BacklightPicture.fadeSeconds
+        case BacklightPicture.random:
+            var age = seconds - litAt[key]
+            // About one key in six lit at a time.
+            if age >= BacklightPicture.twinkleSeconds && Double.random(in: 0..<1) < BacklightPicture.tick / BacklightPicture.twinkleSeconds / 5 {
+                litAt[key] = seconds
+                age = 0
+            }
+            return age < BacklightPicture.twinkleSeconds ? sin(Double.pi * age / BacklightPicture.twinkleSeconds) : 0
+        default: return 1
+        }
     }
 }

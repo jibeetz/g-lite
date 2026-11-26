@@ -46,27 +46,31 @@ struct KeyLayout {
     func iso() -> KeyLayout? {
         var rows = self.rows.map { $0.components(separatedBy: "|") }
         var ids = (0..<self.rows.count).map { $0 < self.ids.count ? self.ids[$0].split(separator: " ").map(String.init) : [] }
-        guard let tab = rows.firstIndex(where: { $0.contains("\\:1.5") }), let caps = rows.firstIndex(where: { $0.contains("Enter:2.25") }),
-              let shift = rows.firstIndex(where: { $0.contains("Shift:2.25") }) else { return nil }
-        let backslash = rows[tab].firstIndex(of: "\\:1.5")!, enter = rows[caps].firstIndex(of: "Enter:2.25")!
-        let leftShift = rows[shift].firstIndex(of: "Shift:2.25")!
+        // The first \, Enter and Shift that have a width: \ 1.5, Enter 2.25 and Shift 2.25 on most, \ 1.25 and Enter 2 on the MX Keys S.
+        // The numpad's Enter comes after the main one.
+        func find(_ row: [String], _ name: String) -> Int? { row.firstIndex { $0.hasPrefix(name + ":") } }
+        guard let tab = rows.firstIndex(where: { find($0, "\\") != nil }), let caps = rows.firstIndex(where: { find($0, "Enter") != nil }),
+              let shift = rows.firstIndex(where: { find($0, "Shift") != nil }) else { return nil }
+        let backslash = find(rows[tab], "\\")!, enter = find(rows[caps], "Enter")!, leftShift = find(rows[shift], "Shift")!
+        func width(_ token: String) -> Float { Float(token.components(separatedBy: ":")[1]) ?? 1 }
+        let backslashWidth = width(rows[tab][backslash]), enterWidth = width(rows[caps][enter]), shiftWidth = width(rows[shift][leftShift])
         let backslashKey = KeyLayout.keyIndex(rows[tab], backslash), enterKey = KeyLayout.keyIndex(rows[caps], enter)
         let shiftKey = KeyLayout.keyIndex(rows[shift], leftShift)
         let enterId = enterKey < ids[caps].count ? ids[caps][enterKey] : "--"
 
-        rows[tab][backslash] = "Enter:1.25:2:.25"
+        rows[tab][backslash] = "Enter:" + KeyLayout.number(backslashWidth - 0.25) + ":2:.25"
         rows[tab].insert("_.25", at: backslash)
         if backslashKey < ids[tab].count { ids[tab][backslashKey] = enterId }
 
         rows[caps][enter] = "#"
         if enter + 1 < rows[caps].count && rows[caps][enter + 1].hasPrefix("_") {
-            rows[caps][enter + 1] = "_" + KeyLayout.number((Float(rows[caps][enter + 1].dropFirst()) ?? 0) + 1.25)
+            rows[caps][enter + 1] = "_" + KeyLayout.number((Float(rows[caps][enter + 1].dropFirst()) ?? 0) + enterWidth - 1)
         } else if enter + 1 < rows[caps].count {
-            rows[caps].insert("_1.25", at: enter + 1)
+            rows[caps].insert("_" + KeyLayout.number(enterWidth - 1), at: enter + 1)
         }
         if !zones && enterKey < ids[caps].count { ids[caps][enterKey] = "2F" }
 
-        rows[shift][leftShift] = "Shift:1.25"
+        rows[shift][leftShift] = "Shift:" + KeyLayout.number(shiftWidth - 1)
         rows[shift].insert("<>", at: leftShift + 1)
         if shiftKey < ids[shift].count { ids[shift].insert(zones ? ids[shift][shiftKey] : "61", at: shiftKey + 1) }
 

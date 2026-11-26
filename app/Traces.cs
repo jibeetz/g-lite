@@ -801,6 +801,57 @@ static class Traces
         }
     }
 
+    // The MX Mechanical Mini: its effects, battery saving, F1–F12 and disabled keys; then on its first firmware, whose backlight has no
+    // automatic mode, levels or fade delays (its first report), so those rows go.
+    static string MxMini()
+    {
+        var found = new FoundDevice
+        {
+            Key = "trace|mxmini", Name = "MX Mechanical Mini", Kind = "keyboard", Link = "Bluetooth", Index = 0xFF,
+            Features = new[] { 0x0001, 0x0003, 0x0005, 0x1004, 0x1814, 0x1815, 0x1982, 0x40A3, 0x4521, 0x4540 }
+        };
+        string first;
+        using (var script = Begin(() => DeviceTable.For(found).Make(found, FakeOther.For(found))))
+        {
+            script.Pick("Effect", "Waves");
+            script.Press("Battery saving");
+            script.Press("F1–F12 as media keys");
+            script.Press("Disable Caps Lock");
+            script.Press("Disable Windows key");
+            script.Press("Disable Caps Lock");
+            script.Press("Revert changes");
+            first = script.Text;
+        }
+        Settings.Remove("device.mxmechanicalmini");
+        var firstFirmware = FakeOther.For(found);
+        firstFirmware.Backlight = (byte[])FakeOther.FirstMiniBacklight.Clone();
+        using (var script = Begin(() => DeviceTable.For(found).Make(found, firstFirmware)))
+        {
+            script.Press("Backlight");
+            script.Press("Backlight");
+            script.Press("Revert changes");
+            first += "on firmware 72.00\n" + script.Text;
+        }
+        // Logi Options+ installed and stopped, its diversions left (docs/mx-key-bindings.md): the screen gives the keys back as it
+        // opens; then Options+ diverts F5 again and Settings stops it.
+        found.Features = found.Features.Concat(new[] { 0x1B04 }).ToArray();
+        var diverted = FakeOther.For(found);
+        OtherDevicePage.OptionsPlusStopped = () => true;
+        try
+        {
+            using (var script = Begin(() => DeviceTable.For(found).Make(found, diverted)))
+            {
+                script.Do("Logi Options+ diverts F5, then Settings stops it", () =>
+                {
+                    diverted.Reporting[2] = 0x01;
+                    ((OtherDevicePage)script.Page).ReleaseKeys();
+                });
+                return first + "with Logi Options+ stopped\n" + script.Text;
+            }
+        }
+        finally { OtherDevicePage.OptionsPlusStopped = () => false; }
+    }
+
     static string Keypad()
     {
         var found = new FoundDevice
@@ -1250,6 +1301,7 @@ static class Traces
         yield return new KeyValuePair<string, Func<string>>("headset", Headset);
         yield return new KeyValuePair<string, Func<string>>("mxmaster", MxMaster);
         yield return new KeyValuePair<string, Func<string>>("mxkeys", MxKeys);
+        yield return new KeyValuePair<string, Func<string>>("mxmini", MxMini);
         yield return new KeyValuePair<string, Func<string>>("keypad", Keypad);
     }
 
@@ -1267,6 +1319,8 @@ static class Traces
         if (Script.ShotFolder != null) Directory.CreateDirectory(Script.ShotFolder);
         var failures = new List<string>();
         Directory.CreateDirectory(folder);
+        // Not this PC's Logi Options+: the trace that wants it stopped says so.
+        OtherDevicePage.OptionsPlusStopped = () => false;
         foreach (var trace in All())
         {
             Fresh();

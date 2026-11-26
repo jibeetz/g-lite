@@ -5,7 +5,7 @@ using System.Collections.Generic;
 static class SelfTest
 {
     static readonly string[] LayoutFiles =
-        { "g515-tkl.json", "g915-tkl.json", "g915.json", "g915-x.json", "g915-x-tkl.json", "g815.json", "g512-x-75.json", "g-full.json", "g-60.json", "g213.json", "g413.json", "g510.json", "g-pro.json", "g410.json", "g810.json", "g910.json" };
+        { "g515-tkl.json", "g915-tkl.json", "g915.json", "g915-x.json", "g915-x-tkl.json", "g815.json", "g512-x-75.json", "g-full.json", "g-60.json", "g213.json", "g413.json", "g510.json", "g-pro.json", "g410.json", "g810.json", "g910.json", "mx-mechanical-mini.json", "mx-keys-s.json" };
 
     static bool LightsM3(FakeG510 keyboard)
     {
@@ -666,6 +666,36 @@ static class SelfTest
                 && device.Wheel == 0x04 && device.Shift == 10,
                 "other devices: a setting the device lacks or out of range isn't sent, and a refused one doesn't stop the others");
         }
+        {
+            var mini = new FoundDevice { Name = "MX Mechanical Mini", Kind = "keyboard", Features = new[] { 0x1982, 0x40A3, 0x4521 } };
+            var device = FakeOther.For(mini);
+            var read = OtherDevice.Read(device, mini);
+            var want = read.Set.Clone();
+            want.Merge(OtherDevice.KeepSupported(OtherSettings.FromText("effect:6,saver:0,mediakeys:0,disabled:19"), read));
+            var refusedSettings = OtherDevice.Apply(device, read, want, read.Set);
+            int effectSent = device.Effect;
+            device.Effect = 1;
+            var unlisted = OtherDevice.Read(device, mini);
+            Check(read.Set.ToText().Contains("effect:0,saver:1,mediakeys:1,disabled:0") && refusedSettings.Count == 0
+                && effectSent == 6 && (device.Backlight[1] & 0x04) == 0 && (device.Backlight[1] >> 3 & 3) == 3 && device.MediaKeys == 0
+                && device.DisabledKeys == 0x11 && unlisted.Set[OtherSettings.Effect] == 0xFF,
+                "MX keyboards: the effect in fn 1 b2, battery saving as options bit 2, F1–F12 in 0x40A3 fn 1, the disabled keys the keyboard"
+                + " can disable as 0x4521 fn 2's bits (no Num Lock on the Mini), and an effect not in the list read as FF");
+        }
+        {
+            var mini = new FoundDevice { Name = "MX Mechanical Mini", Kind = "keyboard", Features = new[] { 0x1982, 0x1B04 } };
+            var device = FakeOther.For(mini);
+            int released = OtherDevice.ReleaseDiverted(device);
+            var read = OtherDevice.Read(device, mini);
+            // The keyboard's own keys set level 5 after the read; a fade delay changed on the screen keeps it.
+            device.Backlight[5] = 5;
+            var want = read.Set.Clone();
+            want[OtherSettings.Away] = 120;
+            OtherDevice.Apply(device, read, want, read.Set);
+            Check(released == 3 && device.Reporting.All(flags => flags == 0) && device.Backlight[5] == 5,
+                "0x1B04: the three diverted controls given back (fn 3 with the valid bit, the flag off), none diverted; in manual mode, a"
+                + " backlight change keeps the level stored on the keyboard");
+        }
         var lightState = new LightState
         {
             FrontOn = true, Lumen = 120, Kelvin = 5000,
@@ -908,7 +938,7 @@ static class SelfTest
             && g9Built.Take(0xD0).Where((x, i) => i < 0x1C || i > 0x1F)
                 .SequenceEqual(g9Profile.Take(0xD0).Where((x, i) => i < 0x1C || i > 0x1F)),
             "saving Wave on the G915 writes the records the keyboard's own Wave profile has, the idle times, and keeps every other byte");
-        // Profile 2 of an owner's G815 (256-byte sectors, the CRC as reported): Breathe, no idle times,
+        // Profile 2 of a real G815 (256-byte sectors, the CRC as reported): Breathe, no idle times,
         // the power-save records copies of the others.
         var g815Profile = FakeHidpp.Hex("01000000000000000000000000" + new string('F', 30) + "00000000"
             + "8002001E8002001F800200208002002180020022900DFF01900DFF02900DFF03"

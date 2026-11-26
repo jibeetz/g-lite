@@ -147,9 +147,10 @@ enum SelfTest {
 
             let keyboard = FakeOther()
             var state = try OtherDevice.read(keyboard, FakeOther.mxKeys())
-            check(state.set.toText() == "light:1,auto:0,level:3,away:30,near:30,powered:300" && state.levels == 8 && state.hosts == 3
+            check(state.set.toText() == "light:1,auto:0,level:3,away:30,near:30,powered:300,saver:1,mediakeys:1,disabled:0" && state.levels == 8
+                  && state.hosts == 3 && state.layoutCode == 0x0D
                   && state.names[0] == "Desk PC" && state.names[1] == "MacBook" && !state.paired[2],
-                  "the MX Keys S's backlight, its fade delays and its computers read as its owner's report says")
+                  "the MX Keys S's backlight, its fade delays, battery saving, F1–F12 and its computers read as its report says")
             var brighter = state.set
             brighter[OtherSettings.level] = 6
             brighter[OtherSettings.away] = 60
@@ -157,6 +158,34 @@ enum SelfTest {
             state = try OtherDevice.read(keyboard, FakeOther.mxKeys())
             check(state.set[OtherSettings.level] == 6 && state.set[OtherSettings.away] == 60 && state.set[OtherSettings.powered] == 300,
                   "the backlight's level and one fade delay are written, the other delays kept")
+            let mini = FakeOther.mxMini()
+            mini.features = [0x1982, 0x40A3, 0x4521]
+            let miniDevice = FakeOther.make(mini)
+            let miniRead = try OtherDevice.read(miniDevice, mini)
+            var miniWant = miniRead.set
+            miniWant.merge(OtherDevice.keepSupported(OtherSettings.fromText("effect:6,saver:0,mediakeys:0,disabled:19"), miniRead))
+            let miniRefused = try OtherDevice.apply(miniDevice, miniRead, miniWant, miniRead.set)
+            let effectSent = miniDevice.effect
+            miniDevice.effect = 1
+            let unlisted = try OtherDevice.read(miniDevice, mini)
+            check(miniRead.set.toText().contains("effect:0,saver:1,mediakeys:1,disabled:0") && miniRefused.isEmpty && effectSent == 6
+                  && miniDevice.backlight[1] & 0x04 == 0 && miniDevice.backlight[1] >> 3 & 3 == 3 && miniDevice.mediaKeys == 0
+                  && miniDevice.disabledKeys == 0x11 && unlisted.set[OtherSettings.effect] == 0xFF,
+                  "MX keyboards: the effect in fn 1 b2, battery saving as options bit 2, F1–F12 in 0x40A3 fn 1, the disabled keys the keyboard"
+                  + " can disable as 0x4521 fn 2's bits (no Num Lock on the Mini), and an effect not in the list read as FF")
+            let diverted = FakeOther.mxMini()
+            diverted.features = [0x1982, 0x1B04]
+            let divertedDevice = FakeOther.make(diverted)
+            let released = try OtherDevice.releaseDiverted(divertedDevice)
+            let divertedRead = try OtherDevice.read(divertedDevice, diverted)
+            // The keyboard's own keys set level 5 after the read; a fade delay changed on the screen keeps it.
+            divertedDevice.backlight[5] = 5
+            var delayed = divertedRead.set
+            delayed[OtherSettings.away] = 120
+            _ = try OtherDevice.apply(divertedDevice, divertedRead, delayed, divertedRead.set)
+            check(released == 3 && divertedDevice.reporting.allSatisfy { $0 == 0 } && divertedDevice.backlight[5] == 5,
+                  "0x1B04: the three diverted controls given back (fn 3 with the valid bit, the flag off), none diverted; in manual mode, a"
+                  + " backlight change keeps the level stored on the keyboard")
         } catch {
             check(false, "fake other device: \(error)")
         }
@@ -466,7 +495,7 @@ enum SelfTest {
     static func layouts() {
         let files = ["g515-tkl.json", "g915-tkl.json", "g915.json", "g915-x.json", "g915-x-tkl.json", "g815.json", "g512-x-75.json",
                      "g-full.json", "g-60.json", "g213.json", "g413.json", "g510.json", "g-pro.json", "g410.json", "g810.json",
-                     "g910.json"]
+                     "g910.json", "mx-mechanical-mini.json", "mx-keys-s.json"]
         for file in files {
             guard let layout = KeyLayout.load(file) else { check(false, "the layout \(file) loads"); continue }
             check(layout.rows.count > 3 && layout.keyIds().count == layout.keyNames().count, "the layout \(file) loads")

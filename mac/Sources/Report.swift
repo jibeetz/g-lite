@@ -6,7 +6,7 @@ import IOKit.hid
 // sections and text as Windows, so a report reads the same from either.
 enum Report {
     static let reads: [Int: [Int]] = [
-        0x0001: [0, 1], 0x0003: [0, 1], 0x1990: [0, 2, 3, 7, 8], 0x1814: [0], 0x1815: [0, 1], 0x1982: [0, 2], 0x1B04: [0, 1],
+        0x0001: [0, 1], 0x0003: [0, 1], 0x1990: [0, 2, 3, 7, 8], 0x1814: [0], 0x1815: [0, 1], 0x1982: [0, 2], 0x1B04: [0, 1, 2], 0x40A3: [0], 0x4521: [0, 1],
         0x1F20: [0, 1], 0x2110: [0], 0x2111: [0, 1], 0x2121: [0, 1, 3], 0x2150: [0, 1], 0x2201: [0, 1, 2], 0x2202: [0, 1, 2, 3, 4, 5],
         0x4540: [0], 0x8010: [0], 0x8020: [0], 0x8040: [0, 1], 0x8060: [0, 1], 0x8061: [0, 1, 2], 0x8070: [0, 1, 2], 0x8071: [0],
         0x8081: [0], 0x8100: [0, 2, 4, 5, 0xB], 0x8110: [0], 0x8101: [8, 0xC], 0x8300: [0], 0x8310: [0, 1, 2],
@@ -26,7 +26,7 @@ enum Report {
         0x1001: "battery voltage", 0x1004: "battery", 0x1300: "LED control", 0x1814: "change host", 0x1815: "hosts info",
         0x1982: "backlight", 0x1990: "illumination", 0x1B04: "controls", 0x1D4B: "wireless status", 0x1F20: "battery and auto-off",
         0x2110: "SmartShift", 0x2111: "SmartShift", 0x2121: "scroll wheel", 0x2150: "thumb wheel", 0x2201: "DPI", 0x2202: "DPI, X and Y",
-        0x8061: "report rate, to 8 kHz", 0x4540: "keyboard layout", 0x8010: "G keys", 0x8020: "M keys", 0x8030: "MR key",
+        0x8061: "report rate, to 8 kHz", 0x4540: "keyboard layout", 0x40A3: "F1–F12", 0x4521: "disable keys", 0x8010: "G keys", 0x8020: "M keys", 0x8030: "MR key",
         0x8040: "brightness", 0x8060: "report rate", 0x8070: "LED effects", 0x8071: "RGB effects", 0x8080: "per-key lighting",
         0x8081: "per-key lighting", 0x8100: "onboard profiles", 0x8101: "onboard files", 0x8110: "button spy", 0x8300: "sidetone",
         0x8310: "equalizer",
@@ -217,7 +217,11 @@ enum Report {
             }
         case 0x1B04:
             let count = reader.show("count", 0x1B04, 0)
-            for i in 0..<min(Int(count?[0] ?? 0), 48) { reader.show("control \(i)", 0x1B04, 1, [UInt8(i)]) }
+            // fn 2 is how each control reports now: diverted (byte 2 bit 0) by an app like Logi Options+, and remapped to (bytes 3–4).
+            // docs/mx-key-bindings.md.
+            for i in 0..<min(Int(count?[0] ?? 0), 48) {
+                if let info = reader.show("control \(i)", 0x1B04, 1, [UInt8(i)]) { reader.show("reporting \(i)", 0x1B04, 2, [info[0], info[1]]) }
+            }
         case 0x1990:
             reader.show("on", id, 0); reader.show("brightness info", id, 2); reader.show("brightness", id, 3)
             reader.show("temperature info", id, 7); reader.show("temperature", id, 8)
@@ -241,6 +245,11 @@ enum Report {
             reader.show("rates, wired", id, 0, [0]); reader.show("rates, wireless", id, 0, [1]); reader.show("rates now", id, 1)
             reader.show("now, wired", id, 2, [0]); reader.show("now, wireless", id, 2, [1])
         case 0x4540: reader.show("layout", id, 0)
+        case 0x40A3:
+            // Each Easy-Switch computer's: FF, "the one in use", reads 00 on an MX Keys S whatever it has (docs/other-devices.md).
+            reader.show("this computer", id, 0, [0xFF])
+            for host in 0..<3 { reader.show("computer \(host + 1)", id, 0, [UInt8(host)]) }
+        case 0x4521: reader.show("can disable", id, 0); reader.show("disabled", id, 1)
         case 0x8010, 0x8020: reader.show("count", id, 0)
         case 0x8040: reader.show("info", id, 0); reader.show("now", id, 1)
         case 0x8060: reader.show("rates", id, 0); reader.show("now", id, 1)
