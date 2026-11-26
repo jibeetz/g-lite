@@ -1,12 +1,14 @@
 import AppKit
 
-// The main window (app/Program.cs, MainWindow): the devices in a sidebar, one page per device, then Settings and Logs.
+// The main window (app/Program.cs, MainWindow): the devices in a sidebar, one page per device, and Settings and Logs at its bottom,
+// in a list of their own so they stay put while devices come and go.
 final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
     enum Row: Equatable {
         case heading(String), device(String), settings, logs
     }
 
-    private let table = NSTableView()
+    private let table = NSTableView(), appTable = NSTableView()
+    private let appRows: [Row] = [.heading("G-Lite"), .settings, .logs]
     private let detail = NSViewController()
     private let split = NSSplitViewController()
     private var rows: [Row] = []
@@ -30,18 +32,36 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
         super.init(window: window)
         window.delegate = self
 
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("row"))
-        table.addTableColumn(column)
-        table.headerView = nil
-        table.style = .sourceList
-        table.rowSizeStyle = .large
-        table.dataSource = self
-        table.delegate = self
-        let scroll = NSScrollView()
-        scroll.documentView = table
-        scroll.drawsBackground = false
+        let scroll = NSScrollView(), appScroll = NSScrollView()
+        for (list, holder) in [(table, scroll), (appTable, appScroll)] {
+            list.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("row")))
+            list.headerView = nil
+            list.style = .sourceList
+            list.rowSizeStyle = .large
+            list.dataSource = self
+            list.delegate = self
+            holder.documentView = list
+            holder.drawsBackground = false
+            holder.translatesAutoresizingMaskIntoConstraints = false
+        }
+        appScroll.hasVerticalScroller = false
+        appScroll.verticalScrollElasticity = .none
+        appScroll.automaticallyAdjustsContentInsets = false
+        appTable.reloadData()
         let sidebar = NSViewController()
-        sidebar.view = scroll
+        sidebar.view = NSView()
+        sidebar.view.addSubview(scroll)
+        sidebar.view.addSubview(appScroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: sidebar.view.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: sidebar.view.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: sidebar.view.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: appScroll.topAnchor),
+            appScroll.leadingAnchor.constraint(equalTo: sidebar.view.leadingAnchor),
+            appScroll.trailingAnchor.constraint(equalTo: sidebar.view.trailingAnchor),
+            appScroll.bottomAnchor.constraint(equalTo: sidebar.view.bottomAnchor, constant: -10),
+            appScroll.heightAnchor.constraint(equalToConstant: appTable.rect(ofRow: appRows.count - 1).maxY + 4),
+        ])
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = 200
         sidebarItem.maximumThickness = 280
@@ -68,7 +88,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
                 else { page.update(device); page.scanned() }
             }
         }
-        rows = (found.isEmpty ? [] : [.heading("Devices")] + found.map { .device($0.key) }) + [.heading("G-Lite"), .settings, .logs]
+        rows = found.isEmpty ? [] : [.heading("Devices")] + found.map { .device($0.key) }
         empty.show(scanning: scanning, refused: Devices.refused)
         table.reloadData()
         if case .device(let key) = selected, devices[key] != nil { select(selected) }
@@ -96,9 +116,11 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
         case .logs: page = logs
         case .heading: return
         }
-        if let index = rows.firstIndex(of: row), table.selectedRow != index {
-            table.selectRowIndexes([index], byExtendingSelection: false)
+        let list = appRows.contains(row) ? appTable : table, other = list === table ? appTable : table
+        if let index = self.rows(list).firstIndex(of: row), list.selectedRow != index {
+            list.selectRowIndexes([index], byExtendingSelection: false)
         }
+        other.deselectAll(nil)
         if detail.children.first !== page {
             detail.children.first?.view.removeFromSuperview()
             detail.children.first?.removeFromParent()
@@ -125,22 +147,24 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
     // Every page that holds the keys gives them back (at quit).
     func giveBack() { for page in pages.values { (page as? DevicePage)?.giveBack() } }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    private func rows(_ tableView: NSTableView) -> [Row] { tableView === appTable ? appRows : rows }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { rows(tableView).count }
 
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
-        if case .heading = rows[row] { return true }
+        if case .heading = rows(tableView)[row] { return true }
         return false
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !self.tableView(tableView, isGroupRow: row) }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard table.selectedRow >= 0, rows[table.selectedRow] != selected else { return }
-        select(rows[table.selectedRow])
+        guard let list = notification.object as? NSTableView, list.selectedRow >= 0, rows(list)[list.selectedRow] != selected else { return }
+        select(rows(list)[list.selectedRow])
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        switch rows[row] {
+        switch rows(tableView)[row] {
         case .heading(let title):
             let text = NSTextField(labelWithString: title)
             text.font = .systemFont(ofSize: 11, weight: .semibold)
