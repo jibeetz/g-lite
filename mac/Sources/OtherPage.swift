@@ -252,7 +252,8 @@ final class OtherPage: DevicePage {
         var refused: [Int] = []
         run({ device in
             if startedAt != self.sequence { return }
-            refused = try OtherDevice.apply(device, state, want, before)
+            // What the device has now, not the snapshot: a send still running when this one was queued changes it.
+            refused = try OtherDevice.apply(device, state, want, self.sent)
             var now = want
             for setting in refused { now[setting] = before[setting] }
             self.sent = now
