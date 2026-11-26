@@ -67,11 +67,21 @@ Windows had was ported one after the other.
 UI fixes along the way: title height, box margins and centring, sidebar icons of fixed width, every screen kept within Windows' window
 size (868 x 730).
 
+17. **Fixes after first real use** (2026-11-26):
+    - the other devices' screen compares with what the device has when a send runs, as Windows does, so a backlight turned on
+      again while the turn-off was still being sent is no longer skipped;
+    - Demo Mode relaunches with `Process` (with `NSWorkspace.openApplication` both copies waited on each other and quit);
+    - the menu bar item's battery column starts after the longest name;
+    - the sidebar's G-Lite section (Settings, Logs) is pinned at the bottom, so it doesn't move as devices are found.
+
 ## Tested on real devices
 
 | What | How | Result |
 |---|---|---|
 | MX Keys S, LIFT (Bluetooth) | `--scan`, then the other devices' screen | Read correctly; the backlight and DPI changed by the user read back as set |
+| MX Keys S backlight (0x1982) | the screen, and direct writes | On, off, Automatic and Level taken at once and read back; the fade delays read back as set (the keys actually fading after them not watched). Plugged in, the keys light up only at the next key press, as the screen's note says |
+| Demo Mode | the menu bar item's Demo Mode and Leave Demo Mode, clicked | Relaunches into the demo and back |
+| Menu bar item, sidebar | used | Battery on the same line as a long name; G-Lite section stays at the bottom |
 | Screen capture and sound | `--screen` | Colours of the areas and audio bands correct (sound checked with `afplay`) |
 | Microphone list | the same discovery as Test sidetone | Built-in, Continuity and virtual microphones listed |
 | Keyboard layout legends | Game view on a French layout | AZERTY legends shown |
@@ -84,7 +94,7 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 - **Writes to onboard memory** (G515, G915 family, mice, G9x pages, G300): the same bytes as Windows, compared in the self-test, but
   never sent to a real device from the Mac. A backup is always made first.
 - **Interactions only simulated or not clicked**: the drag rectangle (simulated with synthetic events), Try effect, Test sidetone,
-  the light bar's Per zone switch, the Game view's clicks, the Demo Mode menu item, the report's Copy and Open GitHub issue.
+  the light bar's Per zone switch, the Game view's clicks, the report's Copy and Open GitHub issue.
 - **The device report on a real device**: only on the fakes so far. Its first real use is the next step for adding devices.
 
 ## What's left
@@ -98,6 +108,9 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 ### Known differences from Windows
 
+- The MX Keys S's own support is being added on Windows; it comes to the Mac at the next sync.
+- Windows is said to have a hidden demo button on the app's title; it isn't in the Windows code as of upstream/main 2026-11-25. The
+  Mac has Demo Mode in the menu bar item and the app menu.
 - The slot in use (M1-M3) is checked on load and on the keyboard's events; Windows also checks it when the window comes to the front,
   for a change made while G-Lite was closed.
 - Picking an effect for one zone of a G512 or G513 while a per-key effect runs on All: the per-key effect sets every zone to Off again
