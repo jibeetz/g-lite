@@ -8,6 +8,9 @@ enum Rows {
     static let height: CGFloat = 56, inset: CGFloat = 16
     // Every kind of control has one width in a row, so the same control looks the same on every screen.
     static let controlWidth: CGFloat = 240, valueWidth: CGFloat = 64
+    // The picture and the sections keep the window's usual width, centred, when the window is wider (full screen): a key picture's
+    // height follows its width, so it pushed the rows out of sight.
+    static let maxWidth: CGFloat = 640
 
     // A section: its title, then its rows in a rounded box.
     static func section(_ title: String, _ rows: [NSView]) -> NSStackView {
@@ -64,11 +67,25 @@ enum Rows {
     // The page: header, then the sticky picture (if any), then the sections, which scroll; the status line and buttons at the
     // bottom, under a line.
     static func page(header: NSView, sticky: NSView?, sections: [NSView], status: NSView?, buttons: [NSView]) -> NSView {
-        let top = NSStackView(views: [header] + (sticky.map { [$0] } ?? []))
+        var stickyHolder: NSView?
+        if let sticky = sticky {
+            let holder = NSView()
+            sticky.translatesAutoresizingMaskIntoConstraints = false
+            holder.addSubview(sticky)
+            let fill = sticky.widthAnchor.constraint(equalTo: holder.widthAnchor)
+            fill.priority = .defaultHigh
+            NSLayoutConstraint.activate([
+                fill, sticky.widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
+                sticky.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+                sticky.topAnchor.constraint(equalTo: holder.topAnchor), sticky.bottomAnchor.constraint(equalTo: holder.bottomAnchor),
+            ])
+            stickyHolder = holder
+        }
+        let top = NSStackView(views: [header] + (stickyHolder.map { [$0] } ?? []))
         top.orientation = .vertical
         top.alignment = .leading
         top.spacing = 18
-        if let sticky = sticky { sticky.widthAnchor.constraint(equalTo: top.widthAnchor).isActive = true }
+        if let holder = stickyHolder { holder.widthAnchor.constraint(equalTo: top.widthAnchor).isActive = true }
 
         let content = NSStackView(views: sections)
         content.orientation = .vertical
@@ -90,8 +107,10 @@ enum Rows {
             document.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             document.widthAnchor.constraint(equalTo: clip.widthAnchor),
             content.topAnchor.constraint(equalTo: document.topAnchor),
-            content.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 24),
-            content.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -24),
+            content.leadingAnchor.constraint(greaterThanOrEqualTo: document.leadingAnchor, constant: 24),
+            content.centerXAnchor.constraint(equalTo: document.centerXAnchor),
+            content.widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
+            { let fill = content.widthAnchor.constraint(equalTo: document.widthAnchor, constant: -48); fill.priority = .defaultHigh; return fill }(),
             content.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -16),
         ])
 

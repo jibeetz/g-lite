@@ -259,11 +259,16 @@ enum OtherDevice {
                 let effect = want[OtherSettings.effect] >= 0 && want[OtherSettings.effect] != sent[OtherSettings.effect]
                 // Already in mode 3, a level not picked is the stored one, which the keyboard's own keys may have changed since.
                 let fromLitNow = mode == 3 && !picked && now != 3 && want[OtherSettings.level] < 0
+                let on = want[OtherSettings.light] >= 0 ? want[OtherSettings.light] == 1 : config[0] & 1 != 0
                 var level = mode != 3 ? 0 : picked ? want[OtherSettings.level] : now == 3 ? Int(config[5])
                     : !fromLitNow ? want[OtherSettings.level] : Int(try device.call(index(0x1982), 2)[1])
                 // A level the screen doesn't show that reads 0 (faded, or never set) would store the backlight off: the middle one.
                 if fromLitNow && level == 0 { level = max(1, (state.levels - 1) / 2) }
-                let on = want[OtherSettings.light] >= 0 ? want[OtherSettings.light] == 1 : config[0] & 1 != 0
+                // Turned off, the MX Mechanical Mini reads its stored level as 0 (seen on one, 2026-11-26), so turning it on again kept
+                // it dark: the level the screen shows instead, else the middle one.
+                if mode == 3 && !picked && now == 3 && level == 0 && on && config[0] & 1 == 0 {
+                    level = want[OtherSettings.level] > 0 ? want[OtherSettings.level] : max(1, (state.levels - 1) / 2)
+                }
                 var delays: [UInt8] = []
                 for (index, setting) in OtherSettings.delays.enumerated() {
                     let units = want[setting] > 0 ? want[setting] / 5 : Int(config[6 + 2 * index]) | Int(config[7 + 2 * index]) << 8

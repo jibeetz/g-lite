@@ -173,6 +173,18 @@ enum SelfTest {
                   && miniDevice.disabledKeys == 0x11 && unlisted.set[OtherSettings.effect] == 0xFF,
                   "MX keyboards: the effect in fn 1 b2, battery saving as options bit 2, F1–F12 in 0x40A3 fn 1, the disabled keys the keyboard"
                   + " can disable as 0x4521 fn 2's bits (no Num Lock on the Mini), and an effect not in the list read as FF")
+            // Turned off, the Mini reads its stored level as 0; turning it on again sends the level the screen shows.
+            let darkDevice = FakeOther.make(mini)
+            let litRead = try OtherDevice.read(darkDevice, mini)
+            darkDevice.backlight[0] = 0
+            darkDevice.backlight[5] = 0
+            var offRead = litRead
+            offRead.set[OtherSettings.light] = 0
+            var turnOn = offRead.set
+            turnOn[OtherSettings.light] = 1
+            _ = try OtherDevice.apply(darkDevice, offRead, turnOn, offRead.set)
+            check(darkDevice.backlight[0] == 1 && darkDevice.backlight[5] == 7,
+                  "MX keyboards: turning the backlight on again sends the level shown, not the 0 the keyboard reads while off")
             let diverted = FakeOther.mxMini()
             diverted.features = [0x1982, 0x1B04]
             let divertedDevice = FakeOther.make(diverted)

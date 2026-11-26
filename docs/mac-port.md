@@ -10,7 +10,8 @@ The code is in `mac/`; how it's organised, file by file, is in the Mac section o
   Windows, so a `settings.txt` or a preset written by one reads on the other.
 - `mac/build.sh` builds a universal `G-Lite.app` (arm64 and x86_64, macOS 12 and up), runs `GLite --selftest` first and stops if it
   fails, signs the app, then quits the running copy and installs it in `/Applications` (or `~/Applications`).
-- Every device family Windows supports has its screen, with Windows' features up to 0.1.0-beta, in its rows layout.
+- Every device family Windows supports has its screen, with Windows' features up to its MX keyboards (after 0.1.0-beta), in its rows
+  layout.
 - Almost everything is tested only on fake devices (`--demo`, the self-test). See [Tested on real devices](#tested-on-real-devices).
 
 ## Building and running
@@ -24,8 +25,8 @@ mac/build.sh
   build until the app was signed with a real identity. If the permission still gets stuck: `tccutil reset ListenEvent org.g-lite.GLite`.
 - Permissions the app asks for: Input Monitoring (to open a receiver that is also a keyboard, and for Echo's key presses), Screen
   Recording (Screen and Audio effects), Microphone (the headset's Test sidetone only).
-- Command line: `GLite --demo` (fake devices, log in the temp folder, settings in `GLite/Demo`; also Demo Mode in the menus), `--demo --snapshot <folder>` (each screen drawn into a PNG, light
-  mode), `--scan` (what a scan finds, read only), `--screen` (what the Screen and Audio effects see for two seconds), `--selftest`,
+- Command line: `GLite --demo` (fake devices, log in the temp folder, settings in `GLite/Demo`; also Demo Mode in the menus),
+  `--demo --snapshot <folder>` (each screen drawn into a PNG, light mode, the headset's also scrolled to its equalizer), `--scan` (what a scan finds, read only), `--screen` (what the Screen and Audio effects see for two seconds), `--selftest`,
   `--iconset`, `--tray` (start in the menu bar only, used by Run at login).
 
 ## The steps, in order
@@ -108,13 +109,17 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 
 - **A receiver (C547 and others)**: the code assumes macOS shows the receiver's HID++ interface as one IOHIDDevice with both FF00
   collections. If that's wrong, nothing behind a receiver is found.
+- **MX keyboards' new rows on the real MX Keys S**: its picture, F1–F12 and the disabled keys were written for it on Windows, but the
+  Mac has only read its backlight so far.
 - **Every G device**: G515, G915 family, G512 X 75, zones keyboards, G560, mice, headsets, Litra, G510, G600, G300.
 - **Writes to onboard memory** (G515, G915 family, mice, G9x pages, G300): the same bytes as Windows, compared in the self-test, but
   never sent to a real device from the Mac. A backup is always made first.
 - **Interactions only simulated or not clicked**: the drag rectangle (simulated with synthetic events), Try effect, Test sidetone,
   the light bar's Per zone switch, the Game view's clicks, the report's Copy and Open GitHub issue; from the 0.1.0-beta sync, the
   equalizer's sliders and Flat, the G510's M1 to M3 and its Bindings and Game views, the G560 picture's click (only drawn, in
-  `--snapshot`).
+  `--snapshot`); from the MX keyboards' sync, the backlight's Effect and Battery saving, F1–F12 as media keys, the disabled keys,
+  the backlight picture's effects (only the static ones seen in `--snapshot`), and Logi Options+'s diverted keys given back (its
+  detection on a Mac, by the app and process name, not tried with Logi Options+ installed).
 - **The device report on a real device**: only on the fakes so far. Its first real use is the next step for adding devices.
 
 ## What's left
@@ -136,8 +141,9 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 - The slot in use (M1-M3) is checked on load and on the keyboard's events; Windows also checks it when the window comes to the front,
   for a change made while G-Lite was closed.
 - A click on a zone keyboard's picture doesn't pick its zone (Windows' does); the G560's picture does.
-- Picking an effect for one zone of a G512, G513, G PRO, G410, G810 or G910 while a per-key effect runs on All: the per-key effect sets every zone to Off again
-  every 2 s, which overrides that zone (not checked against Windows).
+- Picking an effect for one zone of a G512, G513, G PRO, G410, G810 or G910 while a per-key effect runs on All: the per-key effect
+  sets every zone to Off again every 2 s, which overrides that zone (not checked against Windows).
+- Settings has no Services box (G HUB, Logitech Gaming Software, Logi Options+ stopped and started): those are Windows services.
 - A device with 0x40A0 and a coarse battery (the K295) gets the other devices' screen instead of Windows' info page with its media keys.
 - When idle is hidden while a live effect runs, since a live effect isn't saved.
 
