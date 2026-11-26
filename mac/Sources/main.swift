@@ -205,12 +205,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // The demo (every device Windows' --demo lists, simulated) as a relaunch with --demo, and back.
     @objc private func switchDemo() {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.arguments = (demo ? [] : ["--demo"]) + ["--relaunched"]
-        configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
-            DispatchQueue.main.async { if error == nil { NSApp.terminate(nil) } }
-        }
+        // Not NSWorkspace.openApplication: its completion waits for the new copy to finish launching, which waits for this one to
+        // quit, so both gave up after 5 s. Process returns once the new copy exists.
+        let relaunch = Process()
+        relaunch.executableURL = Bundle.main.executableURL
+        relaunch.arguments = (demo ? [] : ["--demo"]) + ["--relaunched"]
+        do { try relaunch.run() } catch { Log.add("G-Lite", "error", "Demo Mode didn't relaunch: \(error)"); return }
+        NSApp.terminate(nil)
     }
 
     @objc private func openDevice(_ sender: NSMenuItem) {
