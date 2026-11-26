@@ -73,6 +73,9 @@ size (868 x 730).
     - Demo Mode relaunches with `Process` (with `NSWorkspace.openApplication` both copies waited on each other and quit);
     - the menu bar item's battery column starts after the longest name;
     - the sidebar's G-Lite section (Settings, Logs) is pinned at the bottom, so it doesn't move as devices are found.
+18. **The games' easter egg** (`Games.swift`): a click on the sidebar's G-Lite heading opens the virtual G515 TKL with Blocks, Snake
+    and Mines, as Windows' G-Lite title does. Windows' version shows the fake keyboard's effect; the Mac's shows only the factory
+    animation's rainbow (what Windows shows there too, its fake keyboard being new each time).
 
 ## Tested on real devices
 
@@ -109,8 +112,8 @@ Everything else has only run against the fake devices (`mac/Sources/Fake.swift`)
 ### Known differences from Windows
 
 - The MX Keys S's own support is being added on Windows; it comes to the Mac at the next sync.
-- Windows is said to have a hidden demo button on the app's title; it isn't in the Windows code as of upstream/main 2026-11-25. The
-  Mac has Demo Mode in the menu bar item and the app menu.
+- The click on Windows' G-Lite title opens the games, not the demo; the demo is `--demo` only on Windows, and Demo Mode in the menus on
+  the Mac.
 - The slot in use (M1-M3) is checked on load and on the keyboard's events; Windows also checks it when the window comes to the front,
   for a change made while G-Lite was closed.
 - Picking an effect for one zone of a G512 or G513 while a per-key effect runs on All: the per-key effect sets every zone to Off again

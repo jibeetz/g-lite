@@ -74,6 +74,7 @@ So far: the scan (HID++ 2.0 devices, direct, Bluetooth and receiver slots; names
 - `Sources/LiveKeyboardPage.swift`: the page of the 0x8071 keyboards other than the G515, with the G915 family's G keys and M1-M3
 - `Sources/IdleBox.swift`: `IdleBox` (the When idle box) and `IdleTime` (seconds since the last input)
 - `Sources/GameMode.swift`: `GameModeKeys` (the usages, the 0x4523 bitmap, packets, preset text), `GameKeys` (a page's list, kept and sent), `GameModeBox` (the Game view)
+- `Sources/Games.swift`: the easter egg, from `app/Game.cs` and `app/KeyboardView.cs`: a click on the sidebar's G-Lite heading (it doesn't look clickable, on purpose) opens a virtual G515 TKL with Blocks, Snake and Mines played on its keys (`GamesWindow`, `GamesBoard`); idle, the keys show the factory animation's rainbow
 - `Sources/ButtonRows.swift`: a row per button or G key with its action, Keystroke… recording the next keys (app/Buttons.cs, ButtonRows)
 - `Sources/G510.swift` (`G510Settings`, `G510Lighting`), `Sources/G510Page.swift`: the G510, from `app/G510.cs` and `app/G510Page.cs`; feature reports go through `Hidpp.getFeature` and `setFeature` (`Port.getFeature`, `setFeature`)
 - `Sources/Litra.swift` (`LightRange`, `LightState`, `LitraProtocol`), `Sources/LightPicture.swift`, `Sources/LightPage.swift`: the Litra lights, from `app/LitraProtocol.cs` and `app/LightPage.cs`

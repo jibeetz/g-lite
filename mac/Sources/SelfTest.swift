@@ -700,6 +700,40 @@ enum SelfTest {
         let aAndEnter = GameModeKeys.bitmap(controls, [0x04, 0x28])
         check(aAndEnter[7] == 0x41 && aAndEnter.enumerated().allSatisfy { $0.offset == 7 || $0.element == 0 },
               "Game mode bitmap (0x4523): A and Enter are the G515's controls 0x38 and 0x3E, bits 0 and 6 of byte 7 (tried)")
+        // The games (app/SelfTest.cs).
+        let blocks = Blocks()
+        for y in 0..<Game.rows { blocks.cells[y][Game.columns - 1] = 1 }
+        blocks.cells[0][Game.columns - 2] = 2
+        blocks.clearFull()
+        check(blocks.score == 1 && blocks.cells[0][Game.columns - 1] == 2 && blocks.cells[0][Game.columns - 2] == 0, "games: full column clears and shifts")
+        blocks.key(.space)
+        check(!blocks.over, "games: piece locks after drop")
+        let gridCount = Game.columns * Game.rows
+        let rects = (0..<gridCount).map { CGRect(x: CGFloat($0 % Game.columns * 40), y: CGFloat($0 / Game.columns * 40), width: 36, height: 36) }
+        let gridCells: [[Cell]?] = (0..<gridCount).map { [Cell(x: $0 % Game.columns, y: $0 / Game.columns)] }
+        let snake = Snake(gridCells)
+        snake.key(.left)
+        snake.step()
+        check(!snake.over && snake.at(2, 5) != 0, "games: snake ignores reversing into itself")
+        for _ in 0..<Game.columns - 5 { snake.step() }
+        check(!snake.over && snake.at(2, 0) != 0, "games: snake wraps through the wall")
+        var mines = Mines(rects, gridCells)
+        mines.open(2 * Game.columns + 7)
+        check(!mines.over && mines.opened(2 * Game.columns + 7) && mines.minesAround(2 * Game.columns + 7) == 0, "games: first open is never a mine")
+        mines = Mines(rects, gridCells); mines.placed = true; mines.mine[0] = true
+        mines.open(gridCount - 1)
+        check(mines.over && mines.score == gridCount - 1, "games: opening an empty key floods the board and wins")
+        mines = Mines(rects, gridCells); mines.placed = true; mines.mine[0] = true
+        mines.open(0)
+        check(mines.over && mines.score == 0 && mines.at(0, 0) == 0xFF3030, "games: opening a mine ends the game and shows it")
+        let wide = [CGRect(x: 0, y: 0, width: 76, height: 36), CGRect(x: 80, y: 0, width: 36, height: 36), CGRect(x: 20, y: 40, width: 36, height: 36)]
+        mines = Mines(wide, [[Cell(x: 0, y: 0), Cell(x: 1, y: 0)], [Cell(x: 2, y: 0)], [Cell(x: 0, y: 1)]]); mines.placed = true; mines.mine[1] = true
+        check(mines.minesAround(0) == 1 && mines.minesAround(2) == 0, "games: neighbours follow the keys, not the grid")
+        if let g515 = KeyLayout.load("g515-tkl.json") {
+            let boardCells = GamesBoard(g515).cells
+            check(boardCells.compactMap { $0 }.count > 50 && boardCells.compactMap { $0 }.joined().allSatisfy { $0.y < Game.rows },
+                  "games: the G515's bottom five rows are the board")
+        }
         if let g515 = KeyLayout.load("g515-tkl.json") {
             let usages = Array(Set(g515.keyIds().map(ZoneLighting.usage).filter { GameModeKeys.canPick($0, true) } + [0x32, 0x64]))
             check(usages.count == 88 && usages.allSatisfy { usage in

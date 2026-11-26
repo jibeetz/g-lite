@@ -18,6 +18,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
     private let empty: EmptyPage
     private let makePage: (FoundDevice) -> NSViewController
     private var selected: Row = .settings
+    private var games: GamesWindow?
     var closed: (() -> Void)?
 
     init(makePage: @escaping (FoundDevice) -> NSViewController, rescan: @escaping () -> Void) {
@@ -169,6 +170,8 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
             let text = NSTextField(labelWithString: title)
             text.font = .systemFont(ofSize: 11, weight: .semibold)
             text.textColor = .secondaryLabelColor
+            // The games' easter egg, as Windows' G-Lite title: nothing shows it can be clicked, on purpose.
+            if tableView === appTable { text.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(toggleGames))) }
             return text
         case .device(let key):
             guard let device = devices[key] else { return nil }
@@ -195,6 +198,11 @@ final class MainWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSou
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 8)
         return stack
+    }
+
+    @objc private func toggleGames() {
+        if games == nil { games = GamesWindow.make() }
+        games?.toggle(beside: window)
     }
 
     func windowWillClose(_ notification: Notification) { closed?() }
