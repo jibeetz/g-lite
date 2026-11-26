@@ -185,10 +185,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             none.isEnabled = false
             menu.addItem(none)
         }
+        // The values' column starts after the longest name, so a long one doesn't push its battery onto a second line.
+        let column = devices.map { MenuRow.width($0.shortName) }.max().map { max(220, $0 + 70) } ?? 220
         for device in devices {
             let row = NSMenuItem(title: device.shortName, action: #selector(openDevice), keyEquivalent: "")
             row.representedObject = device.key
-            row.attributedTitle = MenuRow.text(device.shortName, device.asleep ? "asleep" : device.batteryText)
+            row.attributedTitle = MenuRow.text(device.shortName, device.asleep ? "asleep" : device.batteryText, column: column)
             row.image = NSImage(systemSymbolName: Ui.symbol(device), accessibilityDescription: nil)
             menu.addItem(row)
         }
@@ -259,9 +261,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 // A menu row with its value right-aligned, like the Windows tray menu's shortcut column.
 enum MenuRow {
-    static func text(_ name: String, _ value: String) -> NSAttributedString {
+    static func width(_ name: String) -> CGFloat {
+        ceil((name as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width)
+    }
+
+    static func text(_ name: String, _ value: String, column: CGFloat) -> NSAttributedString {
         let style = NSMutableParagraphStyle()
-        style.tabStops = [NSTextTab(textAlignment: .right, location: 220)]
+        style.tabStops = [NSTextTab(textAlignment: .right, location: column)]
         let text = NSMutableAttributedString(string: name + (value.isEmpty ? "" : "\t" + value),
                                              attributes: [.paragraphStyle: style, .font: NSFont.menuFont(ofSize: 0)])
         if !value.isEmpty {
